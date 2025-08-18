@@ -1,0 +1,30 @@
+{
+  "name": "@nextshop/shared-schemas",
+  "version": "1.0.0",
+  "description": "Shared schemas and types for NextShop",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.3.3"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./intents": {
+      "types": "./dist/intents.d.ts", 
+      "default": "./dist/intents.js"
+    }
+  }
+}

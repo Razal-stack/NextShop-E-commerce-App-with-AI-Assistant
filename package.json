@@ -1,0 +1,42 @@
+{
+  "name": "nextshop-mcp-ecommerce",
+  "version": "1.0.0",
+  "description": "NextShop - MCP-native E-commerce App with AI Assistant",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=8.0.0"
+  },
+  "packageManager": "pnpm@8.15.1",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "clean": "turbo run clean",
+    "test": "turbo run test",
+    "test:e2e": "turbo run test:e2e",
+    "type-check": "turbo run type-check",
+    "format": "prettier --write \"**/*.{ts,tsx,md}\"",
+    "setup": "pnpm install && pnpm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "eslint": "^8.57.0",
+    "prettier": "^3.2.5",
+    "turbo": "^1.12.4",
+    "typescript": "^5.3.3"
+  },
+  "keywords": [
+    "ecommerce",
+    "mcp",
+    "nextjs",
+    "ai",
+    "shopping"
+  ],
+  "author": "NextShop Team",
+  "license": "MIT"
+}
