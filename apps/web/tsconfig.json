@@ -20,9 +20,14 @@
     ],
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./*"],
-      "@/components/*": ["./components/*"],
-      "@/lib/*": ["./lib/*"],
+      "@/*": ["./src/*"],
+      "@/components/*": ["./src/components/*"],
+      "@/lib/*": ["./src/lib/*"],
+      "@/utils/*": ["./src/utils/*"],
+      "@/hooks/*": ["./src/hooks/*"],
+      "@/services/*": ["./src/services/*"],
+      "@/types/*": ["./src/types/*"],
+      "@/constants/*": ["./src/constants/*"],
       "@/app/*": ["./app/*"],
       "@/styles/*": ["./styles/*"]
     }

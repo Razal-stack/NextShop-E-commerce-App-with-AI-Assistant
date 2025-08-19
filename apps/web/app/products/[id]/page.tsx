@@ -1,4 +1,4 @@
-import ProductDetailPage from "@/components/ProductDetailPage";
+import ProductDetailPage from "@/components/features/ProductDetailPage";
 
 export default function ProductPage() {
   return <ProductDetailPage />;
