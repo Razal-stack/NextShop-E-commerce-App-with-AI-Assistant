@@ -13,12 +13,8 @@ export const API_ENDPOINTS = {
   MCP_SERVER: process.env.NEXT_PUBLIC_MCP_SERVER_URL || 'http://localhost:3001'
 } as const;
 
-export const PRODUCT_CATEGORIES = [
-  'electronics',
-  'jewelery',
-  "men's clothing",
-  "women's clothing"
-] as const;
+// Dynamic product categories - fetched from API
+export const PRODUCT_CATEGORIES: string[] = [];
 
 export const SORT_OPTIONS = {
   ASC: 'asc',

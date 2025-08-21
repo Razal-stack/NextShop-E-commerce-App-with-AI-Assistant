@@ -5,6 +5,6 @@ const router = Router();
 const categoryController = new CategoryController();
 
 // GET /api/categories - Get all categories
-router.get('/', categoryController.getAllCategories);
+router.get('/', categoryController.getCategories);
 
 export default router;

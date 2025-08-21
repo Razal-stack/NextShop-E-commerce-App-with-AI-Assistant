@@ -12,6 +12,9 @@ export const ProductSchema = z.object({
     rate: z.number(),
     count: z.number(),
   }),
+  // Additional properties from backend API
+  score: z.number().optional(),
+  displayPrice: z.string().optional(),
 });
 
 export type Product = z.infer<typeof ProductSchema>;

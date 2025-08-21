@@ -10,6 +10,63 @@ export interface CartFilters {
 export class CartService {
   private fakeStoreAPI = new FakeStoreAPI();
 
+  async addItemToCart(userId: number, productId: number, quantity: number): Promise<Cart> {
+    try {
+      const cart = await this.fakeStoreAPI.addToCart(userId, productId, quantity);
+      return cart;
+    } catch (error) {
+      throw new Error(`Failed to add product ${productId} to cart: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  async getUserCart(userId: number): Promise<Cart | null> {
+    try {
+      const cart = await this.fakeStoreAPI.getCart(userId);
+      return cart;
+    } catch (error) {
+      // Return null if no cart exists, don't throw error
+      return null;
+    }
+  }
+
+  async getUserCartWithProductDetails(userId: number): Promise<any> {
+    try {
+      const cart = await this.getUserCart(userId);
+      if (!cart || !cart.products || cart.products.length === 0) {
+        return { products: [] };
+      }
+
+      // Fetch product details for each item in cart
+      const productsWithDetails = await Promise.all(
+        cart.products.map(async (item: CartItem) => {
+          try {
+            const product = await this.fakeStoreAPI.getProduct(item.productId);
+            return {
+              ...product,
+              quantity: item.quantity
+            };
+          } catch (error) {
+            // If we can't fetch product details, return basic info
+            return {
+              id: item.productId,
+              title: `Product ${item.productId}`,
+              price: 0,
+              quantity: item.quantity,
+              image: '/api/placeholder/64/64'
+            };
+          }
+        })
+      );
+
+      return {
+        ...cart,
+        products: productsWithDetails
+      };
+    } catch (error) {
+      return { products: [] };
+    }
+  }
+
   async getAllCarts(filters: CartFilters = {}): Promise<Cart[]> {
     try {
       // FakeStore API endpoint: GET /carts

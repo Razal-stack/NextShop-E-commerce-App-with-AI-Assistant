@@ -7,10 +7,10 @@ const router = Router();
 const userController = new UserController();
 
 // GET /api/users - Get all users
-router.get('/', validateQuery(UserQuerySchema), userController.getAllUsers);
+router.get('/', validateQuery(UserQuerySchema), userController.getUsers);
 
 // GET /api/users/:id - Get single user by ID
-router.get('/:id', validateParams(ProductIdSchema), userController.getUserById);
+router.get('/:id', validateParams(ProductIdSchema), userController.getUser);
 
 // POST /api/users - Create new user (FakeStore standard)
 router.post('/', validateBody(CreateUserSchema), userController.createUser);

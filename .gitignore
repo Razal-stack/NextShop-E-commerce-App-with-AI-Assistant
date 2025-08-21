@@ -102,3 +102,11 @@ jspm_packages/
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# Python venvs
+venv/
+.env/
+
+# Python cache
+__pycache__/
+*.py[cod]

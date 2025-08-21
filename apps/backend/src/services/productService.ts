@@ -12,6 +12,12 @@ export class ProductService {
     this.fakeStoreAPI = new FakeStoreAPI();
   }
 
+  async find(filters: ProductFilters = {}) {
+    // This is a stub. You should implement logic to search products by filters.
+    const result = await this.getAllProducts(filters);
+    return result.data || [];
+  }
+
   async getAllProducts(filters: ProductFilters = {}) {
     try {
       const products = await this.fakeStoreAPI.getProducts(filters);

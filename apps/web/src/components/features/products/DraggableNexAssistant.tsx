@@ -1,457 +1,737 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { Sparkles, Calculator, SlidersHorizontal, BarChart3, ChevronRight, User, Mic, Image, Send } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { 
+  Sparkles, 
+  ChevronRight, 
+  User, 
+  Mic, 
+  Image, 
+  Send,
+  MessageCircle,
+  ShoppingCart,
+  Heart,
+  X,
+  Search,
+  RotateCcw,
+  Plus,
+  ArrowUp
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { useUIStore } from '@/lib/store';
-import { toast } from 'sonner';
+import { 
+  useCartStore, 
+  useWishlistStore, 
+  useUserStore
+} from '@/lib/store';
+import { Product } from '@/lib/types';
+import { createMcpClient } from '@/lib/mcpClient';
+import { AIAssistantUIHandler, ChatMessage } from '@/lib/aiAssistant/uiHandler';
+import { useRouter } from 'next/navigation';
 
 export default function DraggableNexAssistant() {
-  const { isCartOpen, isWishlistOpen, setCartOpen, setWishlistOpen } = useUIStore();
-  const [position, setPosition] = useState({ x: 20, y: 200 });
+  const { addItem: addToCart } = useCartStore();
+  const { addItem: addToWishlist } = useWishlistStore();
+  const { session } = useUserStore();
+  const router = useRouter();
+  
+  const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isExpanded, setIsExpanded] = useState(false);
   const [inputText, setInputText] = useState('');
-  const [isOnLeft, setIsOnLeft] = useState(false); // Default to right side
+  const [isOnLeft, setIsOnLeft] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [hasDragged, setHasDragged] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [isTyping, setIsTyping] = useState(false);
+  const [placeholderIndex, setPlaceholderIndex] = useState(0);
+  const [displayedText, setDisplayedText] = useState('');
+  const [showQuickSuggestions, setShowQuickSuggestions] = useState(true);
+  const [typingDots, setTypingDots] = useState(0);
+  
+  // Initialize UI handler
+  const uiHandler = new AIAssistantUIHandler({
+    onNavigate: (payload) => {
+      if (payload.page) {
+        router.push(payload.page);
+        // Don't auto-close chat - let user decide when to close it
+      }
+    },
+    onProductAction: (action, product) => {
+      if (!session) {
+        // Let Nex handle the error message internally
+        const errorMessage = uiHandler.createErrorMessage('Please log in to add items to your cart or wishlist.');
+        setMessages(prev => [...prev, errorMessage]);
+        return;
+      }
+      
+      if (action === 'add_to_cart') {
+        addToCart(product);
+      } else if (action === 'add_to_wishlist') {
+        addToWishlist(product);
+      }
+    },
+    onError: (error) => {
+      // Handle errors internally through Nex instead of toast
+      const errorMessage = uiHandler.createErrorMessage(error);
+      setMessages(prev => [...prev, errorMessage]);
+    }
+  });
+  
+  const quickSearchSuggestions = [
+    { icon: Search, text: "Ask: 'Find electronics under £200'", category: "electronics" },
+    { icon: ShoppingCart, text: "Ask: 'Show me trending clothes'", category: "clothing" },  
+    { icon: Heart, text: "Ask: 'What are the best rated products?'", category: "popular" },
+    { icon: Search, text: "Try: 'Find gifts for birthdays'", category: "gifts" },
+    { icon: ShoppingCart, text: "Ask: 'Compare similar products for me'", category: "compare" },
+    { icon: Heart, text: "Try: 'Show me 5-star electronics'", category: "ratings" }
+  ];
 
-  // Safe boundary constants
-  const HEADER_HEIGHT = 80; // Approximate header height
-  const EDGE_PADDING = 20; // Distance from screen edges
-  const ICON_SIZE = 64;
-  const DRAG_THRESHOLD = 3; // Minimum distance to consider as drag (reduced)
+  // Simplified placeholder queries for debugging
+  const placeholderQueries = [
+    "Hello! How can I help you?",
+    "Find products under £200",
+    "What are you looking for?",
+    "Ask me anything!",
+  ];
+  
+  const mcpClient = createMcpClient();
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Initialize position properly at bottom-right
+  // Initialize position after component mounts
   useEffect(() => {
-    const initPosition = () => {
-      if (typeof window === 'undefined') return;
-      
-      const windowWidth = window.innerWidth;
-      const windowHeight = window.innerHeight;
-      
-      // Start at bottom-right with safe boundaries
-      const startX = windowWidth - ICON_SIZE - EDGE_PADDING;
-      const startY = windowHeight - ICON_SIZE - EDGE_PADDING;
-      
-      setPosition({ x: startX, y: startY });
-      setIsOnLeft(false); // Starting on right side
-    };
-
-    const timer = setTimeout(initPosition, 100);
-    window.addEventListener('resize', initPosition);
-    
-    return () => {
-      clearTimeout(timer);
-      window.removeEventListener('resize', initPosition);
-    };
+    if (typeof window !== 'undefined') {
+      setPosition({ x: window.innerWidth - 80, y: window.innerHeight - 80 });
+    }
   }, []);
 
-  const handleDragStart = () => {
-    setIsDragging(true);
-    setHasDragged(false);
-  };
+  // Auto-scroll to bottom when messages change
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
-  const handleDrag = (event: any, info: any) => {
-    // Detect if user has actually dragged beyond threshold
-    const dragDistance = Math.sqrt(info.offset.x ** 2 + info.offset.y ** 2);
-    if (dragDistance > DRAG_THRESHOLD) {
-      setHasDragged(true);
+  // Animated typing dots for AI thinking
+  useEffect(() => {
+    if (isTyping) {
+      const interval = setInterval(() => {
+        setTypingDots(prev => (prev + 1) % 4);
+      }, 500);
+      return () => clearInterval(interval);
     }
-  };
+  }, [isTyping]);
 
-  const handleDragEnd = (event: any, info: any) => {
-    setIsDragging(false);
-    
-    // If dragged, update position to where it was dropped BUT enforce strict boundaries
-    if (hasDragged && !isExpanded) {
-      const windowWidth = window.innerWidth;
-      const windowHeight = window.innerHeight;
-      
-      // Calculate the desired final position
-      const desiredX = position.x + info.offset.x;
-      const desiredY = position.y + info.offset.y;
-      
-      // Apply STRICT boundary constraints
-      const minY = HEADER_HEIGHT + EDGE_PADDING; // Below header with padding
-      const maxY = windowHeight - ICON_SIZE - EDGE_PADDING; // Above bottom edge
-      const minX = EDGE_PADDING; // Away from left edge
-      const maxX = windowWidth - ICON_SIZE - EDGE_PADDING; // Away from right edge
-      
-      // Constrain the position within strict boundaries
-      const finalX = Math.max(minX, Math.min(maxX, desiredX));
-      const finalY = Math.max(minY, Math.min(maxY, desiredY));
-      
-      // Update to the constrained position
-      setPosition({ x: finalX, y: finalY });
-      
-      // Determine which side for expanded chat positioning
-      const centerX = windowWidth / 2;
-      const iconCenterX = finalX + (ICON_SIZE / 2);
-      setIsOnLeft(iconCenterX < centerX);
+  // Simplified typewriter animation
+  useEffect(() => {
+    // Stop animation immediately if user types or there are messages
+    if (messages.length > 0 || inputText.length > 0) {
+      setDisplayedText('');
+      return;
     }
-    
-    // Reset drag state after a brief delay to prevent click interference
-    setTimeout(() => {
-      setHasDragged(false);
-    }, 100);
-  };
 
-  const handleSendMessage = () => {
-    if (!inputText.trim()) return;
-    toast.success("Nex is analyzing your request...");
-    setInputText('');
-  };
+    let isMounted = true;
+    const currentQuery = placeholderQueries[placeholderIndex];
+    let charIndex = 0;
 
-  const handleToggleExpanded = () => {
-    // Only toggle if we haven't just finished dragging
-    if (!hasDragged && !isDragging) {
-      // If cart or wishlist is open, close them first
-      if (isCartOpen || isWishlistOpen) {
-        setCartOpen(false);
-        setWishlistOpen(false);
-      } else {
-        setIsExpanded(!isExpanded);
+    const typeNextChar = () => {
+      // Double-check conditions before each character
+      if (!isMounted || charIndex >= currentQuery.length || inputText.length > 0) {
+        if (isMounted && inputText.length === 0) {
+          // Wait 2 seconds then switch to next query
+          setTimeout(() => {
+            if (isMounted && inputText.length === 0) {
+              setPlaceholderIndex((prev) => (prev + 1) % placeholderQueries.length);
+              setDisplayedText('');
+            }
+          }, 2000);
+        }
+        return;
       }
+
+      setDisplayedText(currentQuery.substring(0, charIndex + 1));
+      charIndex++;
+      
+      setTimeout(typeNextChar, 100);
+    };
+
+    // Start typing after brief delay
+    const startTimer = setTimeout(typeNextChar, 500);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(startTimer);
+    };
+  }, [placeholderIndex, inputText, messages.length]);
+
+  // Handle drag functionality
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.target === e.currentTarget || (e.target as HTMLElement).closest('.w-14')) {
+      setIsDragging(true);
+      setHasDragged(false);
+      
+      const startX = e.clientX - position.x;
+      const startY = e.clientY - position.y;
+      
+      const handleMouseMove = (e: MouseEvent) => {
+        setHasDragged(true);
+        const newX = Math.max(0, Math.min(window.innerWidth - 56, e.clientX - startX));
+        const newY = Math.max(0, Math.min(window.innerHeight - 56, e.clientY - startY));
+        
+        setPosition({ x: newX, y: newY });
+        setIsOnLeft(newX < window.innerWidth / 2);
+      };
+      
+      const handleMouseUp = () => {
+        setIsDragging(false);
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
+      };
+      
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
     }
   };
 
-  // Fixed positions for expanded chat interface - always consistent positioning
-  const getExpandedPosition = () => {
-    const zIndex = isCartOpen || isWishlistOpen ? 'z-10' : 'z-50'; // Lower z-index when cart/wishlist is open
-    if (isOnLeft) {
-      return `fixed left-6 top-24 bottom-6 w-[28rem] ${zIndex}`; // Left side - increased width
-    } else {
-      return `fixed right-6 top-24 bottom-6 w-[28rem] ${zIndex}`; // Right side - increased width
+  const handleToggle = () => {
+    if (!hasDragged) {
+      setIsExpanded(!isExpanded);
     }
   };
 
-  // Don't render the draggable icon when expanded
-  if (!isExpanded) {
-    const windowWidth = typeof window !== 'undefined' ? window.innerWidth : 1200;
-    const windowHeight = typeof window !== 'undefined' ? window.innerHeight : 800;
+  const handleClearChat = () => {
+    setMessages([]);
+    setShowQuickSuggestions(true);
+    setInputText('');
+    setIsTyping(false);
+    setPlaceholderIndex(0);
+    setDisplayedText('');
+  };
+
+  const handleAddToCart = (product: Product) => {
+    uiHandler.handleProductAction('add_to_cart', product);
+  };
+
+  const handleAddToWishlist = (product: Product) => {
+    uiHandler.handleProductAction('add_to_wishlist', product);
+  };
+
+  const handleSendMessage = async (overrideText?: string) => {
+    const messageText = overrideText || inputText.trim();
     
+    // Validate message
+    const validation = uiHandler.validateMessage(messageText);
+    if (!validation.valid) {
+      // Handle validation error internally through Nex
+      const errorMessage = uiHandler.createErrorMessage(validation.error || 'Please enter a message');
+      setMessages(prev => [...prev, errorMessage]);
+      return;
+    }
+
+    // Hide quick suggestions after first message
+    if (showQuickSuggestions) {
+      setShowQuickSuggestions(false);
+    }
+
+    // Create user message
+    const userMessage = uiHandler.createUserMessage(messageText);
+    setMessages(prev => [...prev, userMessage]);
+    setInputText('');
+    setIsTyping(true);
+    setTypingDots(0);
+
+    try {
+      // Build conversation history
+      const conversationHistory = uiHandler.buildConversationHistory(messages);
+      conversationHistory.push({ role: 'user', content: messageText });
+
+      // Send message to backend
+      const response = await mcpClient.sendMessage(conversationHistory);
+      
+      // Process response using UI handler
+      const assistantMessage = uiHandler.processResponse(response, messageText);
+      setMessages(prev => [...prev, assistantMessage]);
+
+    } catch (error) {
+      console.error('Chat error:', error);
+      const errorMessage = uiHandler.createErrorMessage(
+        'I encountered an issue processing your request. Let me try a different approach or please rephrase your question.'
+      );
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setIsTyping(false);
+      setTypingDots(0);
+    }
+  };
+
+  // Handle quick search suggestions
+  const handleQuickSuggestion = (suggestion: typeof quickSearchSuggestions[0]) => {
+    const processedText = uiHandler.processQuickSuggestion(suggestion.text);
+    handleSendMessage(processedText);
+  };
+
+  if (!isExpanded) {
     return (
       <motion.div
-        drag
-        dragMomentum={false}
-        dragElastic={0}
-        // Allow free dragging within screen bounds
-        dragConstraints={{
-          left: EDGE_PADDING,
-          right: windowWidth - ICON_SIZE - EDGE_PADDING,
-          top: HEADER_HEIGHT + EDGE_PADDING,
-          bottom: windowHeight - ICON_SIZE - EDGE_PADDING
-        }}
-        onDragStart={handleDragStart}
-        onDrag={handleDrag}
-        onDragEnd={handleDragEnd}
-        animate={{ 
-          x: position.x, 
-          y: position.y
-        }}
-        transition={{ 
-          type: "spring", 
-          stiffness: 300, 
-          damping: 25,
-          mass: 0.8
-        }}
+        className="fixed z-50 cursor-pointer"
         style={{ 
-          position: 'fixed',
-          left: 0,
-          top: 0,
-          zIndex: isCartOpen || isWishlistOpen ? 10 : 9999 // Lower z-index when cart/wishlist is open
+          left: position.x,
+          top: position.y
         }}
-        className="cursor-move"
-        whileHover={{ scale: isDragging ? 1 : 1.05 }}
-        whileTap={{ scale: isDragging ? 1 : 0.95 }}
-        whileDrag={{ 
-          scale: 1.1,
-          rotate: [0, -2, 2, 0],
-          transition: { rotate: { duration: 0.2 } }
-        }}
+        onMouseDown={handleMouseDown}
+        onClick={handleToggle}
+        whileHover={{ scale: 1.05 }}
+        whileTap={{ scale: 0.95 }}
       >
-        <motion.div
-          className={`w-16 h-16 rounded-full shadow-xl flex items-center justify-center cursor-pointer relative overflow-hidden brand-glow ${
-            isDragging ? 'shadow-2xl' : ''
-          }`}
-          style={{ 
-            background: isDragging 
-              ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' 
-              : 'var(--brand-gradient)',
-            opacity: isCartOpen || isWishlistOpen ? 0.7 : 1 // Dimmed when cart/wishlist is open
-          }}
-          onClick={handleToggleExpanded}
-          whileHover={{ 
-            boxShadow: isDragging 
-              ? "0 0 40px rgba(102, 126, 234, 0.8)" 
-              : "0 0 30px rgba(4, 57, 215, 0.5)",
-          }}
-        >
+        <div className="w-14 h-14 rounded-full flex items-center justify-center shadow-lg hover:shadow-xl transition-all duration-300 brand-glow" style={{ background: 'var(--brand-gradient)' }}>
           <motion.div
-            animate={isDragging ? {
+            animate={{
+              scale: [1, 1.2, 1],
               rotate: [0, 180, 360],
-              scale: [1, 1.3, 1]
-            } : { 
-              rotate: [0, 360],
-              scale: [1, 1.2, 1]
             }}
-            transition={isDragging ? {
-              rotate: { duration: 1, repeat: Infinity, ease: "linear" },
-              scale: { duration: 0.5, repeat: Infinity, ease: "easeInOut" }
-            } : { 
-              rotate: { duration: 4, repeat: Infinity, ease: "linear" },
-              scale: { duration: 2, repeat: Infinity, ease: "easeInOut" }
+            transition={{
+              duration: 4,
+              repeat: Infinity,
+              ease: "easeInOut",
             }}
           >
-            <Sparkles className={`${isDragging ? 'w-10 h-10' : 'w-8 h-8'} text-white transition-all duration-200`} />
+            <Sparkles className="w-6 h-6 text-white" />
           </motion.div>
-          <div className="absolute inset-0 ai-shimmer"></div>
-          
-          {/* Pulsing notification */}
-          <motion.div
-            animate={{ scale: [1, 1.3, 1] }}
-            transition={{ duration: 2, repeat: Infinity }}
-            className="absolute -top-1 -right-1 w-4 h-4 bg-gold-500 rounded-full flex items-center justify-center pulse-brand"
-          >
-            <div className="w-2 h-2 bg-white rounded-full"></div>
-          </motion.div>
-          
-          {/* Drag hint when hovering and not dragging */}
-          {!isDragging && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              whileHover={{ opacity: 1 }}
-              className="absolute -bottom-8 left-1/2 transform -translate-x-1/2 text-xs text-slate-600 whitespace-nowrap pointer-events-none"
-            >
-              Drag to move • Click to chat
-            </motion.div>
-          )}
-        </motion.div>
+        </div>
       </motion.div>
     );
   }
 
-  // Expanded chat interface with fixed positioning and smooth animations
   return (
-    <motion.div
-      initial={{ 
-        opacity: 0, 
-        scale: 0.8,
-        x: isOnLeft ? -50 : 50,
-        y: -20
-      }}
-      animate={{ 
-        opacity: 1, 
-        scale: 1,
-        x: 0,
-        y: 0
-      }}
-      exit={{ 
-        opacity: 0, 
-        scale: 0.8,
-        x: isOnLeft ? -50 : 50,
-        y: -20
-      }}
-      transition={{
-        type: "spring",
-        stiffness: 300,
-        damping: 25,
-        duration: 0.3
-      }}
-      className={getExpandedPosition()}
-    >
-      <Card className="h-full flex flex-col shadow-2xl border-0 overflow-hidden bg-white backdrop-blur-sm">
-        {/* Modern Header with improved visual hierarchy */}
-        <div className="relative flex items-center justify-between p-4 text-white" style={{ background: 'var(--brand-gradient)' }}>
-          {/* Subtle background pattern */}
-          <div className="absolute inset-0 opacity-10" style={{
-            backgroundImage: 'radial-gradient(circle at 20% 80%, rgba(255,255,255,0.3) 0%, transparent 50%), radial-gradient(circle at 80% 20%, rgba(255,255,255,0.2) 0%, transparent 50%)'
-          }}></div>
-          
-          <div className="relative flex items-center space-x-3">
-            <motion.div
-              animate={{ 
-                rotate: [0, 360],
-                scale: [1, 1.1, 1]
-              }}
-              transition={{ 
-                rotate: { duration: 12, repeat: Infinity, ease: "linear" },
-                scale: { duration: 4, repeat: Infinity, ease: "easeInOut" }
-              }}
-              className="w-12 h-12 bg-white/15 backdrop-blur-sm rounded-xl flex items-center justify-center border border-white/20"
-            >
-              <Sparkles className="w-6 h-6" />
-            </motion.div>
-            <div>
-              <h3 className="font-bold text-lg">Nex Assistant</h3>
-              <p className="text-xs text-white/90 font-medium">AI Shopping Expert</p>
-            </div>
-          </div>
-          
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setIsExpanded(false)}
-            className="relative h-10 w-10 text-white hover:bg-white/15 rounded-xl transition-all duration-200"
-          >
-            <motion.div
-              whileHover={{ rotate: 90 }}
-              transition={{ duration: 0.2 }}
-            >
-              ×
-            </motion.div>
-          </Button>
-        </div>
-
-        {/* Chat Content Area with cleaner, more spacious design */}
-        <div className="flex-1 overflow-hidden flex flex-col">
-          <ScrollArea className="flex-1 p-6">
-            {/* Clean Welcome Section */}
-            <div className="mb-6">
-              <h4 className="text-lg font-semibold text-slate-800 mb-3">Welcome to Nex Assistant</h4>
-              <p className="text-slate-600 leading-relaxed">
-                I'll help you build the perfect cart within your budget and specifications.
-              </p>
-            </div>
-
-            {/* Key Features with clean spacing - reduced to 3 items */}
-            <div className="mb-6">
-              <h5 className="text-sm font-semibold text-slate-700 mb-3 flex items-center">
-                <span className="w-1.5 h-1.5 bg-brand-500 rounded-full mr-3"></span>
-                What I can help you with
-              </h5>
-              <div className="space-y-3">
-                {[
-                  { 
-                    text: "Build cart within your budget", 
-                    icon: Calculator, 
-                    desc: "Set your budget and I'll find the best products" 
-                  },
-                  { 
-                    text: "Find products by specifications", 
-                    icon: SlidersHorizontal, 
-                    desc: "Tell me your requirements and I'll match them" 
-                  },
-                  { 
-                    text: "Compare similar products", 
-                    icon: BarChart3, 
-                    desc: "Side-by-side comparison of features and prices" 
-                  }
-                ].map((feature, index) => (
-                  <motion.button
-                    key={index}
-                    whileHover={{ x: 4 }}
-                    whileTap={{ scale: 0.98 }}
-                    onClick={() => setInputText(feature.text)}
-                    className="flex items-start p-3 text-left bg-white hover:bg-slate-50 rounded-lg border border-slate-200 hover:border-brand-200 transition-all duration-200 w-full group"
-                  >
-                    <div className="w-8 h-8 bg-brand-50 rounded-lg flex items-center justify-center mr-3 group-hover:bg-brand-100 transition-colors duration-200">
-                      <feature.icon className="w-4 h-4 text-brand-600" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-slate-800 mb-1">
-                        {feature.text}
-                      </div>
-                      <div className="text-xs text-slate-500">
-                        {feature.desc}
-                      </div>
-                    </div>
-                    <ChevronRight className="w-3 h-3 text-slate-400 group-hover:text-brand-500 transition-colors duration-200 mt-1" />
-                  </motion.button>
-                ))}
-              </div>
-            </div>
-            
-            {/* Sample conversation - simplified and smaller */}
-            <div className="space-y-3">
-              <h5 className="text-sm font-semibold text-slate-700 flex items-center">
-                <span className="w-1.5 h-1.5 bg-slate-400 rounded-full mr-3"></span>
-                Recent Help
-              </h5>
-              <div className="bg-slate-50 rounded-lg p-3 space-y-2">
-                <div className="flex items-center space-x-2">
-                  <div className="w-5 h-5 bg-slate-200 rounded-full flex items-center justify-center">
-                    <User className="w-2.5 h-2.5 text-slate-600" />
-                  </div>
-                  <span className="text-xs text-slate-700">"Gaming setup under £500"</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-5 h-5 bg-brand-500 rounded-full flex items-center justify-center">
-                    <Sparkles className="w-2.5 h-2.5 text-white" />
-                  </div>
-                  <span className="text-xs text-slate-600">Found 3 complete setups within budget</span>
-                </div>
-              </div>
-            </div>
-          </ScrollArea>
-
-          {/* Enhanced Input Area - Fixed at bottom with guaranteed visibility */}
-          <div className="flex-shrink-0 p-4 bg-white border-t border-slate-200">
-            <div className="space-y-3">
-              {/* Large textarea for better typing experience */}
-              <div className="relative">
-                <textarea
-                  placeholder="Say: &quot;Laptop under £800 for design&quot; or &quot;Build office setup for £1200&quot;"
-                  value={inputText}
-                  onChange={(e) => setInputText(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSendMessage())}
-                  className="w-full h-16 p-3 bg-slate-50 border border-slate-200 hover:border-brand-300 focus:border-brand-400 focus:ring-2 focus:ring-brand-200/50 rounded-lg resize-none text-sm leading-relaxed transition-all duration-200 placeholder:text-slate-400 scrollbar-none overflow-hidden"
-                  rows={2}
-                />
-                {inputText && (
+    <AnimatePresence>
+      {isExpanded && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.8, x: isOnLeft ? -400 : 400 }}
+          animate={{ opacity: 1, scale: 1, x: 0 }}
+          exit={{ opacity: 0, scale: 0.8, x: isOnLeft ? -400 : 400 }}
+          className="fixed z-50"
+          style={{
+            [isOnLeft ? 'left' : 'right']: 20,
+            top: 75,
+            bottom: 20,
+            width: '22vw',
+            minWidth: '340px',
+            maxWidth: '400px'
+          }}
+        >
+          <Card className="h-full flex flex-col shadow-2xl border-0 overflow-hidden bg-white">
+            {/* Header */}
+            <div className="flex-shrink-0 flex items-center justify-between px-6 py-4 border-b" style={{ background: 'var(--brand-gradient)' }}>
+              <div className="flex items-center space-x-3">
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center relative overflow-hidden pulse-brand" style={{ background: 'rgba(255, 255, 255, 0.2)' }}>
                   <motion.div
-                    initial={{ opacity: 0, scale: 0.8 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    className="absolute top-2 right-2"
+                    animate={{
+                      scale: [1, 1.2, 1],
+                      rotate: [0, 180, 360],
+                    }}
+                    transition={{
+                      duration: 4,
+                      repeat: Infinity,
+                      ease: "easeInOut",
+                    }}
                   >
-                    <div className="w-2 h-2 bg-brand-500 rounded-full animate-pulse"></div>
+                    <Sparkles className="w-5 h-5 text-white" />
                   </motion.div>
-                )}
+                  <div className="absolute inset-0 ai-shimmer"></div>
+                </div>
+                <div>
+                  <h3 className="font-bold text-lg text-white">Nex</h3>
+                  <p className="text-xs text-white/80">Your Shopping Assistant</p>
+                </div>
               </div>
               
-              {/* Action row with clean spacing */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 px-2 text-slate-500 hover:text-brand-600 hover:bg-brand-50 rounded-md transition-all duration-200"
-                  >
-                    <Mic className="w-3 h-3 mr-1" />
-                    Record
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 px-2 text-slate-500 hover:text-brand-600 hover:bg-brand-50 rounded-md transition-all duration-200"
-                  >
-                    <Image className="w-3 h-3 mr-1" />
-                    Image Search
-                  </Button>
-                </div>
-                
-                <motion.div
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
+              <div className="flex items-center space-x-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleClearChat}
+                  className="h-8 w-8 p-0 text-white hover:bg-white/20 rounded-full transition-all duration-200"
+                  title="Start New Chat"
                 >
-                  <Button
-                    onClick={handleSendMessage}
-                    disabled={!inputText.trim()}
-                    className="h-8 px-4 text-white rounded-md shadow-sm hover:shadow-md transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                    style={{ background: inputText.trim() ? 'var(--brand-gradient)' : '#e2e8f0' }}
-                  >
-                    <Send className="w-3 h-3 mr-1" />
-                    Send
-                  </Button>
-                </motion.div>
+                  <RotateCcw className="w-4 h-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setIsExpanded(false)}
+                  className="h-8 w-8 p-0 text-white hover:bg-white/20 rounded-full transition-all duration-200"
+                  title="Minimize"
+                >
+                  <X className="w-4 h-4" />
+                </Button>
               </div>
             </div>
-          </div>
-        </div>
-      </Card>
-    </motion.div>
+
+            {/* Main Chat Area */}
+            <div className="flex-1 flex flex-col min-h-0">
+              <ScrollArea className="flex-1 px-6 py-4 scrollbar-thin">
+                {messages.length === 0 ? (
+                  // Show welcome section when no messages
+                  <>
+                    {/* Clean Welcome Section */}
+                    <div className="mb-6">
+                      <h4 className="text-lg font-semibold mb-3" style={{ color: 'var(--brand-800)' }}>Welcome! I'm Nex, Your Shopping Assistant</h4>
+                      <p className="text-slate-600 leading-relaxed">
+                        I'll help you find the perfect products within your budget and specifications. Let's discover something amazing together!
+                      </p>
+                    </div>
+
+                    {/* Quick Search Suggestions */}
+                    {showQuickSuggestions && (
+                      <div className="mb-6">
+                        <h5 className="text-sm font-semibold text-slate-700 mb-3 flex items-center">
+                          <span className="w-1.5 h-1.5 rounded-full mr-3" style={{ backgroundColor: 'var(--brand-500)' }}></span>
+                          Quick searches to get you started
+                        </h5>
+                        <div className="grid grid-cols-1 gap-2">
+                          {quickSearchSuggestions.map((suggestion, index) => (
+                            <motion.button
+                              key={index}
+                              whileHover={{ x: 4 }}
+                              whileTap={{ scale: 0.98 }}
+                              onClick={() => handleQuickSuggestion(suggestion)}
+                              className="flex items-center justify-between p-3 text-left bg-white hover:bg-slate-50 rounded-lg border border-slate-200 transition-all duration-200 w-full group hover:border-blue-200"
+                            >
+                              <div className="flex items-center">
+                                <div className="w-8 h-8 rounded-lg flex items-center justify-center mr-3 group-hover:bg-blue-100 transition-colors duration-200" style={{ backgroundColor: 'var(--brand-50)' }}>
+                                  <suggestion.icon className="w-4 h-4" style={{ color: 'var(--brand-600)' }} />
+                                </div>
+                                <span className="text-sm font-medium text-slate-800">
+                                  {suggestion.text}
+                                </span>
+                              </div>
+                              <ChevronRight className="w-3 h-3 text-slate-400 transition-colors duration-200" style={{ color: 'var(--brand-500)' }} />
+                            </motion.button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  // Show messages when conversation has started
+                  <div className="space-y-4">
+                    {messages.map((message) => (
+                      <motion.div
+                        key={message.id}
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className={`flex ${message.sender === "user" ? "justify-end" : "justify-start"}`}
+                      >
+                        <div
+                          className={`max-w-[80%] p-3 rounded-lg ${
+                            message.sender === "user"
+                              ? "text-white ml-auto"
+                              : "bg-slate-100 text-slate-900"
+                          }`}
+                          style={message.sender === "user" ? { background: 'var(--brand-gradient)' } : {}}
+                        >
+                          <p className="text-sm whitespace-pre-wrap">{message.text}</p>
+                          
+                          {/* Product Cards */}
+                          {message.products && message.products.length > 0 && (
+                            <div className="mt-4 space-y-3">
+                              {message.products.slice(0, 3).map((product) => (
+                                <motion.div 
+                                  key={product.id} 
+                                  initial={{ opacity: 0, y: 10 }}
+                                  animate={{ opacity: 1, y: 0 }}
+                                  className="bg-white rounded-xl p-4 shadow-sm border border-gray-100/80 hover:shadow-lg hover:border-gray-200 transition-all duration-300"
+                                >
+                                  <div className="flex gap-4">
+                                    <div className="flex-shrink-0">
+                                      <img 
+                                        src={product.image} 
+                                        alt={product.title}
+                                        className="w-16 h-16 object-cover rounded-lg border border-gray-100"
+                                      />
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <h4 className="text-sm font-semibold text-gray-900 line-clamp-2 mb-2 leading-tight">
+                                        {product.title}
+                                      </h4>
+                                      <div className="flex items-center gap-3 mb-3">
+                                        <p className="text-lg font-bold text-emerald-600">
+                                          {product.displayPrice || `£${product.price}`}
+                                        </p>
+                                        {product.rating && (
+                                          <div className="flex items-center text-xs">
+                                            <span className="text-yellow-500">⭐</span>
+                                            <span className="text-gray-600 ml-1 font-medium">{product.rating.rate}</span>
+                                            <span className="text-gray-400 ml-1">({product.rating.count})</span>
+                                          </div>
+                                        )}
+                                      </div>
+                                      <div className="flex gap-2">
+                                        <Button
+                                          size="sm"
+                                          className="btn-primary h-8 px-3 text-xs flex-1"
+                                          onClick={() => handleAddToCart(product)}
+                                        >
+                                          <ShoppingCart className="w-3 h-3 mr-1" />
+                                          Add to Cart
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          className="btn-secondary h-8 px-2 text-xs"
+                                          onClick={() => handleAddToWishlist(product)}
+                                        >
+                                          <Heart className="w-3 h-3" />
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          className="btn-ghost h-8 px-2 text-xs"
+                                          onClick={() => router.push(`/products/${product.id}`)}
+                                          title="View Details"
+                                        >
+                                          <ChevronRight className="w-3 h-3" />
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </motion.div>
+                              ))}
+                              {message.totalFound && message.totalFound > 3 && (
+                                <div className="text-center py-3 border-t border-gray-100 mt-4">
+                                  <p className="text-xs text-slate-500 mb-2">
+                                    Showing 3 of {message.totalFound} products
+                                  </p>
+                                  <Button
+                                    size="sm"
+                                    className="btn-secondary text-xs"
+                                    onClick={() => {
+                                      router.push('/products');
+                                      // Don't auto-close the assistant to keep it available
+                                    }}
+                                  >
+                                    View All {message.totalFound} Products
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          
+                          <span className="text-xs opacity-70 mt-1 block">
+                            {message.timestamp.toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </span>
+                        </div>
+                      </motion.div>
+                    ))}
+                    
+                    {isTyping && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="flex justify-start"
+                      >
+                        <div className="bg-slate-100 text-slate-900 p-4 rounded-lg max-w-[80%] border" style={{ background: 'linear-gradient(135deg, var(--brand-50), white)' }}>
+                          <div className="flex items-center space-x-3">
+                            <motion.div
+                              className="w-6 h-6 rounded-full flex items-center justify-center"
+                              style={{ background: 'var(--brand-gradient)' }}
+                              animate={{ rotate: 360 }}
+                              transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                            >
+                              <Sparkles className="w-3 h-3 text-white" />
+                            </motion.div>
+                            <div className="flex-1">
+                              <p className="text-sm font-medium mb-2" style={{ color: 'var(--brand-700)' }}>
+                                Nex is thinking{'.'.repeat(typingDots + 1)}
+                              </p>
+                              <div className="flex items-center space-x-1">
+                                <motion.div
+                                  animate={{ scale: [1, 1.4, 1], opacity: [0.5, 1, 0.5] }}
+                                  transition={{ duration: 0.6, repeat: Infinity, delay: 0 }}
+                                  className="w-2 h-2 rounded-full"
+                                  style={{ backgroundColor: 'var(--brand-400)' }}
+                                />
+                                <motion.div
+                                  animate={{ scale: [1, 1.4, 1], opacity: [0.5, 1, 0.5] }}
+                                  transition={{ duration: 0.6, repeat: Infinity, delay: 0.2 }}
+                                  className="w-2 h-2 rounded-full"
+                                  style={{ backgroundColor: 'var(--brand-400)' }}
+                                />
+                                <motion.div
+                                  animate={{ scale: [1, 1.4, 1], opacity: [0.5, 1, 0.5] }}
+                                  transition={{ duration: 0.6, repeat: Infinity, delay: 0.4 }}
+                                  className="w-2 h-2 rounded-full"
+                                  style={{ backgroundColor: 'var(--brand-400)' }}
+                                />
+                                <span className="text-xs text-slate-500 ml-2">Searching products</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                    <div ref={messagesEndRef} />
+                  </div>
+                )}
+              </ScrollArea>
+
+              {/* Modern Chat Input Area with Inline Icons */}
+              <div className="flex-shrink-0 p-4 bg-white border-t border-slate-200">
+                <div className="space-y-3">
+                  <div className="relative">
+                    <div className="relative flex items-stretch bg-slate-50 border border-slate-200 rounded-2xl transition-all duration-200 focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-100 min-h-[3.5rem]">
+                      {/* Left side icons - vertically centered */}
+                      <div className="flex items-center pl-4 space-x-2">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-8 w-8 p-0 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors duration-200"
+                          onClick={() => {
+                            // Future voice functionality
+                            const voiceMessage = uiHandler.createErrorMessage("🎤 Voice input is coming soon! For now, you can type your questions.");
+                            setMessages(prev => [...prev, voiceMessage]);
+                          }}
+                        >
+                          <Mic className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-8 w-8 p-0 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors duration-200"
+                          onClick={() => {
+                            // Future image functionality
+                            const imageMessage = uiHandler.createErrorMessage("🖼️ Image search is coming soon! Try describing what you're looking for instead.");
+                            setMessages(prev => [...prev, imageMessage]);
+                          }}
+                        >
+                          <Image className="w-4 h-4" />
+                        </Button>
+                      </div>
+
+                      {/* Textarea - larger and more comfortable */}
+                      <div className="flex-1 relative">
+                        <textarea
+                          placeholder=""
+                          value={inputText}
+                          onChange={(e) => setInputText(e.target.value)}
+                          onKeyPress={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
+                              if (inputText.trim() && !isTyping) {
+                                handleSendMessage();
+                              }
+                            }
+                          }}
+                          className="w-full max-h-32 min-h-[3.5rem] py-4 px-3 bg-transparent border-none resize-none text-sm leading-relaxed focus:outline-none scrollbar-thin"
+                          rows={1}
+                          style={{ 
+                            height: 'auto',
+                            overflowY: inputText.split('\n').length > 2 ? 'auto' : 'hidden'
+                          }}
+                          onInput={(e) => {
+                            const target = e.target as HTMLTextAreaElement;
+                            target.style.height = 'auto';
+                            target.style.height = `${Math.max(56, Math.min(target.scrollHeight, 120))}px`;
+                          }}
+                        />
+                        
+                        {/* Custom Animated Placeholder - Simplified */}
+                        {!inputText && (
+                          <div className="absolute inset-0 py-4 px-3 pointer-events-none flex items-center">
+                            {messages.length === 0 ? (
+                              // Animated placeholder for welcome screen
+                              <div className="text-slate-400 text-sm">
+                                <span>{displayedText}</span>
+                                <span 
+                                  className="ml-1 animate-pulse"
+                                  style={{ color: 'var(--brand-500)' }}
+                                >
+                                  |
+                                </span>
+                              </div>
+                            ) : (
+                              // Simple fallback placeholder
+                              <span className="text-slate-400 text-sm">
+                                Type your message...
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Send button - vertically centered */}
+                      <div className="flex items-center pr-4">
+                        <motion.div
+                          whileHover={{ scale: 1.05 }}
+                          whileTap={{ scale: 0.95 }}
+                        >
+                          <Button
+                            onClick={() => handleSendMessage()}
+                            disabled={!inputText.trim() || isTyping}
+                            size="sm"
+                            className={
+                              inputText.trim() && !isTyping
+                                ? "h-9 w-9 p-0 rounded-full transition-all duration-200 shadow-sm border-0"
+                                : "h-9 w-9 p-0 rounded-full bg-slate-300 text-slate-500 cursor-not-allowed border-0"
+                            }
+                            style={
+                              inputText.trim() && !isTyping
+                                ? { 
+                                    background: 'var(--brand-gradient)',
+                                    color: 'white'
+                                  }
+                                : {}
+                            }
+                          >
+                            <ArrowUp className="w-4 h-4" />
+                          </Button>
+                        </motion.div>
+                      </div>
+                    </div>
+
+                    {/* Typing indicator */}
+                    {inputText && (
+                      <motion.div
+                        initial={{ opacity: 0, scale: 0.8 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className="absolute top-3 right-16"
+                      >
+                        <div className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: 'var(--brand-500)' }}></div>
+                      </motion.div>
+                    )}
+                  </div>
+
+                  {/* Helper text below input */}
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center space-x-4 text-slate-500">
+                      <span className="flex items-center">
+                        <span className="w-1.5 h-1.5 rounded-full mr-2" style={{ backgroundColor: 'var(--brand-400)' }}></span>
+                        Press Enter to send
+                      </span>
+                      <span className="flex items-center">
+                        <span className="w-1.5 h-1.5 rounded-full mr-2 bg-slate-300"></span>
+                        Shift + Enter for new line
+                      </span>
+                    </div>
+                    
+                    {isTyping && (
+                      <motion.span
+                        animate={{ opacity: [0.5, 1, 0.5] }}
+                        transition={{ duration: 1.5, repeat: Infinity }}
+                        className="flex items-center text-slate-600"
+                        style={{ color: 'var(--brand-600)' }}
+                      >
+                        <div className="w-3 h-3 rounded-full mr-2 animate-pulse" style={{ backgroundColor: 'var(--brand-400)' }}></div>
+                        Nex is thinking...
+                      </motion.span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </Card>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }

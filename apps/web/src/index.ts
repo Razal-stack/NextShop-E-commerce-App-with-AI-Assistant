@@ -1,5 +1,5 @@
 // Export all organized modules
-export * from './components/features/Cart_new';
+export * from './components/features/Cart';
 export * from './components/features/HomePage';
 export * from './components/features/ProductDetailPage';
 export * from './components/features/ProductsPage';

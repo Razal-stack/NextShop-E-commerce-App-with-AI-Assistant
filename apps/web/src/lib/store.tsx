@@ -6,10 +6,54 @@ import { devtools, persist } from 'zustand/middleware';
 import { Product, CartItem, UserSession, SmartList, AssistantMessage } from './types';
 
 // Store interfaces
+interface ChatMessage {
+  id: string;
+  text: string;
+  sender: "user" | "assistant";
+  timestamp: Date;
+  data?: any;
+  actions?: any[];
+}
+
+interface ChatSession {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+interface AuthenticationStore {
+  isAuthModalOpen: boolean;
+  authMode: 'login' | 'register';
+  isLoggingInViaChat: boolean;
+  tempCredentials: { username: string; password: string } | null;
+  setAuthModalOpen: (open: boolean) => void;
+  setAuthMode: (mode: 'login' | 'register') => void;
+  setLoggingInViaChat: (via: boolean) => void;
+  setTempCredentials: (creds: { username: string; password: string } | null) => void;
+  loginViaChat: (username: string, password: string) => Promise<boolean>;
+}
+
+interface ChatHistoryStore {
+  sessions: ChatSession[];
+  currentSessionId: string | null;
+  isHistoryOpen: boolean;
+  addSession: (messages: ChatMessage[], title?: string) => string;
+  updateSession: (id: string, messages: ChatMessage[]) => void;
+  deleteSession: (id: string) => void;
+  loadSession: (id: string) => ChatMessage[] | null;
+  setCurrentSession: (id: string | null) => void;
+  setHistoryOpen: (open: boolean) => void;
+  generateSessionTitle: (messages: ChatMessage[]) => string;
+  clearAllSessions: () => void;
+}
+
 interface CartStore {
   items: CartItem[];
-  cartId: number | null; // Track the backend cart ID
-  addItem: (product: Product, quantity?: number) => void;
+  cartId: number | null;
+  pendingItems: Product[]; // Items waiting for authentication
+  addItem: (product: Product, quantity?: number) => Promise<boolean>;
   removeItem: (productId: number) => void;
   updateQuantity: (productId: number, quantity: number) => void;
   clearCart: () => void;
@@ -17,14 +61,19 @@ interface CartStore {
   getTotalItems: () => number;
   getTotalPrice: () => number;
   setCartId: (cartId: number | null) => void;
+  processPendingItems: () => void;
+  clearPendingItems: () => void;
 }
 
 interface WishlistStore {
   items: Product[];
-  addItem: (product: Product) => void;
+  pendingItems: Product[]; // Items waiting for authentication
+  addItem: (product: Product) => Promise<boolean>;
   removeItem: (productId: number) => void;
   isInWishlist: (productId: number) => boolean;
   clearWishlist: () => void;
+  processPendingItems: () => void;
+  clearPendingItems: () => void;
 }
 
 interface UserStore {
@@ -70,14 +119,145 @@ interface AssistantStore {
   clearMessages: () => void;
 }
 
-// Zustand stores
+// Enhanced Authentication Store
+export const useAuthStore = create<AuthenticationStore>()(
+  devtools((set, get) => ({
+    isAuthModalOpen: false,
+    authMode: 'login',
+    isLoggingInViaChat: false,
+    tempCredentials: null,
+    setAuthModalOpen: (open) => set({ isAuthModalOpen: open }),
+    setAuthMode: (mode) => set({ authMode: mode }),
+    setLoggingInViaChat: (via) => set({ isLoggingInViaChat: via }),
+    setTempCredentials: (creds) => set({ tempCredentials: creds }),
+    loginViaChat: async (username, password) => {
+      try {
+        // Simulate login API call
+        set({ tempCredentials: { username, password } });
+        
+        // Mock login - in real app, call actual API
+        if (username && password) {
+          const userStore = useUserStore.getState();
+          userStore.setSession({
+            token: 'mock-token',
+            userId: 1,
+            username: username,
+            isAuthenticated: true,
+          });
+          
+          // Process pending items
+          const cartStore = useCartStore.getState();
+          const wishlistStore = useWishlistStore.getState();
+          cartStore.processPendingItems();
+          wishlistStore.processPendingItems();
+          
+          set({ isLoggingInViaChat: false, tempCredentials: null });
+          return true;
+        }
+        return false;
+      } catch (error) {
+        console.error('Login failed:', error);
+        return false;
+      }
+    },
+  }))
+);
+
+// Enhanced Chat History Store
+export const useChatHistoryStore = create<ChatHistoryStore>()(
+  devtools(
+    persist(
+      (set, get) => ({
+        sessions: [],
+        currentSessionId: null,
+        isHistoryOpen: false,
+        addSession: (messages, title) => {
+          const sessionId = crypto.randomUUID();
+          const newSession: ChatSession = {
+            id: sessionId,
+            title: title || get().generateSessionTitle(messages),
+            messages: messages.map(msg => ({ ...msg })),
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          };
+          set((state) => ({ 
+            sessions: [newSession, ...state.sessions.slice(0, 19)] // Keep last 20 sessions
+          }));
+          return sessionId;
+        },
+        updateSession: (id, messages) =>
+          set((state) => ({
+            sessions: state.sessions.map((session) =>
+              session.id === id 
+                ? { 
+                    ...session, 
+                    messages: messages.map(msg => ({ ...msg })), 
+                    title: get().generateSessionTitle(messages),
+                    updatedAt: new Date() 
+                  }
+                : session
+            ),
+          })),
+        deleteSession: (id) =>
+          set((state) => ({
+            sessions: state.sessions.filter((session) => session.id !== id),
+            currentSessionId: state.currentSessionId === id ? null : state.currentSessionId,
+          })),
+        loadSession: (id) => {
+          const session = get().sessions.find((s) => s.id === id);
+          return session ? session.messages : null;
+        },
+        setCurrentSession: (id) => set({ currentSessionId: id }),
+        setHistoryOpen: (open) => set({ isHistoryOpen: open }),
+        generateSessionTitle: (messages) => {
+          const userMessages = messages.filter(msg => msg.sender === 'user');
+          if (userMessages.length === 0) return 'New Chat';
+          
+          const firstUserMessage = userMessages[0].text;
+          if (firstUserMessage.length <= 30) return firstUserMessage;
+          
+          // Auto-generate title based on content
+          if (firstUserMessage.toLowerCase().includes('find') || firstUserMessage.toLowerCase().includes('search')) {
+            return `🔍 ${firstUserMessage.substring(0, 25)}...`;
+          }
+          if (firstUserMessage.toLowerCase().includes('product') || firstUserMessage.toLowerCase().includes('buy')) {
+            return `🛍️ ${firstUserMessage.substring(0, 25)}...`;
+          }
+          if (firstUserMessage.toLowerCase().includes('help')) {
+            return `❓ ${firstUserMessage.substring(0, 25)}...`;
+          }
+          return `💬 ${firstUserMessage.substring(0, 25)}...`;
+        },
+        clearAllSessions: () => set({ sessions: [], currentSessionId: null }),
+      }),
+      {
+        name: 'nextshop-chat-history',
+      }
+    )
+  )
+);
+
+// Enhanced Cart Store with Authentication
 export const useCartStore = create<CartStore>()(
   devtools(
     persist(
       (set, get) => ({
         items: [],
         cartId: null,
-        addItem: (product, quantity = 1) =>
+        pendingItems: [],
+        addItem: async (product, quantity = 1) => {
+          const userStore = useUserStore.getState();
+          const authStore = useAuthStore.getState();
+          
+          if (!userStore.isAuthenticated()) {
+            // Add to pending items and prompt for authentication
+            set((state) => ({
+              pendingItems: [...state.pendingItems.filter(p => p.id !== product.id), product]
+            }));
+            authStore.setAuthModalOpen(true);
+            return false;
+          }
+          
           set((state) => {
             const existingItem = state.items.find((item) => item.id === product.id);
             if (existingItem) {
@@ -101,7 +281,9 @@ export const useCartStore = create<CartStore>()(
                 },
               ],
             };
-          }),
+          });
+          return true;
+        },
         removeItem: (productId) =>
           set((state) => ({
             items: state.items.filter((item) => item.id !== productId),
@@ -125,6 +307,14 @@ export const useCartStore = create<CartStore>()(
         getTotalItems: () => get().items.reduce((total, item) => total + item.quantity, 0),
         getTotalPrice: () =>
           get().items.reduce((total, item) => total + item.price * item.quantity, 0),
+        processPendingItems: () => {
+          const pendingItems = get().pendingItems;
+          set({ pendingItems: [] });
+          pendingItems.forEach((product) => {
+            get().addItem(product);
+          });
+        },
+        clearPendingItems: () => set({ pendingItems: [] }),
       }),
       {
         name: 'nextshop-cart',
@@ -133,18 +323,34 @@ export const useCartStore = create<CartStore>()(
   )
 );
 
+// Enhanced Wishlist Store with Authentication
 export const useWishlistStore = create<WishlistStore>()(
   devtools(
     persist(
       (set, get) => ({
         items: [],
-        addItem: (product) =>
+        pendingItems: [],
+        addItem: async (product) => {
+          const userStore = useUserStore.getState();
+          const authStore = useAuthStore.getState();
+          
+          if (!userStore.isAuthenticated()) {
+            // Add to pending items and prompt for authentication
+            set((state) => ({
+              pendingItems: [...state.pendingItems.filter(p => p.id !== product.id), product]
+            }));
+            authStore.setAuthModalOpen(true);
+            return false;
+          }
+          
           set((state) => {
             if (state.items.find((item) => item.id === product.id)) {
               return state;
             }
             return { items: [...state.items, product] };
-          }),
+          });
+          return true;
+        },
         removeItem: (productId) =>
           set((state) => ({
             items: state.items.filter((item) => item.id !== productId),
@@ -152,6 +358,14 @@ export const useWishlistStore = create<WishlistStore>()(
         isInWishlist: (productId) =>
           get().items.some((item) => item.id === productId),
         clearWishlist: () => set({ items: [] }),
+        processPendingItems: () => {
+          const pendingItems = get().pendingItems;
+          set({ pendingItems: [] });
+          pendingItems.forEach((product) => {
+            get().addItem(product);
+          });
+        },
+        clearPendingItems: () => set({ pendingItems: [] }),
       }),
       {
         name: 'nextshop-wishlist',

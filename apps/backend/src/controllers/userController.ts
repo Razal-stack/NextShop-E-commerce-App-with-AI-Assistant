@@ -13,7 +13,7 @@ export class UserController {
   }
 
   // Get all users
-  getAllUsers = async (req: Request, res: Response): Promise<void> => {
+  getUsers = async (req: Request, res: Response): Promise<void> => {
     try {
       const { limit } = req.query;
       
@@ -34,7 +34,7 @@ export class UserController {
   };
 
   // Get single user by ID
-  getUserById = async (req: Request, res: Response): Promise<void> => {
+  getUser = async (req: Request, res: Response): Promise<void> => {
     try {
       const { id } = req.params;
       const userId = Number(id);

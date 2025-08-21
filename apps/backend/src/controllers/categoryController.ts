@@ -13,7 +13,7 @@ export class CategoryController {
   }
 
   // Get all categories
-  getAllCategories = async (req: Request, res: Response): Promise<void> => {
+  getCategories = async (req: Request, res: Response): Promise<void> => {
     try {
       const result = await this.categoryService.getAllCategories();
       
