@@ -110,3 +110,18 @@ venv/
 # Python cache
 __pycache__/
 *.py[cod]
+
+# AI Models and large files
+*.gguf
+*.bin
+*.safetensors
+models/
+services/ai-server/models/
+*.pt
+*.pth
+*.h5
+*.hdf5
+
+# AI service specific
+services/ai-server/__pycache__/
+services/ai-server/*.log
