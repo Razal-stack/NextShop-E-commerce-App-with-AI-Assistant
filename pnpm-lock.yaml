@@ -103,10 +103,6 @@ importers:
         specifier: ^5.3.3
         version: 5.9.2
 
-  apps/mcp-server: {}
-
-  apps/server: {}
-
   apps/web:
     dependencies:
       '@nextshop/ai-assistant':

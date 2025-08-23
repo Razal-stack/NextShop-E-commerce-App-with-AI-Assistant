@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Sparkles, 
   ChevronRight, 
+  ChevronLeft,
   User, 
   Mic, 
   Image, 
@@ -24,17 +25,20 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { 
   useCartStore, 
   useWishlistStore, 
-  useUserStore
+  useUserStore,
+  useAuthStore
 } from '@/lib/store';
 import { Product } from '@/lib/types';
 import { createMcpClient } from '@/lib/mcpClient';
 import { AIAssistantUIHandler, ChatMessage } from '@/lib/aiAssistant/uiHandler';
 import { useRouter } from 'next/navigation';
+import { Input } from '@/components/ui/input';
 
 export default function DraggableNexAssistant() {
   const { addItem: addToCart } = useCartStore();
   const { addItem: addToWishlist } = useWishlistStore();
-  const { session } = useUserStore();
+  const { session, isAuthenticated } = useUserStore();
+  const { loginViaChat } = useAuthStore();
   const router = useRouter();
   
   const [position, setPosition] = useState({ x: 0, y: 0 });
@@ -49,6 +53,15 @@ export default function DraggableNexAssistant() {
   const [displayedText, setDisplayedText] = useState('');
   const [showQuickSuggestions, setShowQuickSuggestions] = useState(true);
   const [typingDots, setTypingDots] = useState(0);
+  
+  // Pagination state - track current page for each message with products
+  const [messagePagination, setMessagePagination] = useState<Map<number, number>>(new Map());
+  
+  // Login state for inline authentication
+  const [showLoginForm, setShowLoginForm] = useState(false);
+  const [loginCredentials, setLoginCredentials] = useState({ username: '', password: '' });
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [pendingAction, setPendingAction] = useState<{ type: 'cart' | 'wishlist', product: Product } | null>(null);
   
   // Initialize UI handler
   const uiHandler = new AIAssistantUIHandler({
@@ -208,11 +221,127 @@ export default function DraggableNexAssistant() {
   };
 
   const handleAddToCart = (product: Product) => {
+    if (!isAuthenticated()) {
+      // Show login prompt in chat instead of just an error
+      setPendingAction({ type: 'cart', product });
+      showAuthenticationPrompt('add to cart');
+      return;
+    }
     uiHandler.handleProductAction('add_to_cart', product);
   };
 
   const handleAddToWishlist = (product: Product) => {
+    if (!isAuthenticated()) {
+      // Show login prompt in chat instead of just an error
+      setPendingAction({ type: 'wishlist', product });
+      showAuthenticationPrompt('add to wishlist');
+      return;
+    }
     uiHandler.handleProductAction('add_to_wishlist', product);
+  };
+
+  // Show authentication prompt in chat
+  const showAuthenticationPrompt = (action: string) => {
+    const loginPromptMessage: ChatMessage = {
+      id: `auth-prompt-${Date.now()}`,
+      text: `You're not signed in! Please log in to ${action}.`,
+      sender: 'nex',
+      timestamp: new Date()
+    };
+    setMessages(prev => [...prev, loginPromptMessage]);
+    setShowLoginForm(true);
+  };
+
+  // Handle login form submission
+  const handleLogin = async () => {
+    if (!loginCredentials.username || !loginCredentials.password) {
+      const errorMessage: ChatMessage = {
+        id: `error-${Date.now()}`,
+        text: 'Please enter both username and password.',
+        sender: 'nex',
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, errorMessage]);
+      return;
+    }
+
+    setIsLoggingIn(true);
+    const success = await loginViaChat(loginCredentials.username, loginCredentials.password);
+    
+    if (success) {
+      const successMessage: ChatMessage = {
+        id: `success-${Date.now()}`,
+        text: `Welcome back, ${loginCredentials.username}!`,
+        sender: 'nex',
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, successMessage]);
+      
+      // Execute pending action
+      if (pendingAction) {
+        if (pendingAction.type === 'cart') {
+          addToCart(pendingAction.product);
+        } else {
+          addToWishlist(pendingAction.product);
+        }
+        setPendingAction(null);
+      }
+      
+      setShowLoginForm(false);
+      setLoginCredentials({ username: '', password: '' });
+    } else {
+      const errorMessage: ChatMessage = {
+        id: `error-${Date.now()}`,
+        text: 'Login failed. Please check your credentials and try again.',
+        sender: 'nex',
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, errorMessage]);
+    }
+    
+    setIsLoggingIn(false);
+  };
+
+  const handleCancelLogin = () => {
+    setShowLoginForm(false);
+    setLoginCredentials({ username: '', password: '' });
+    setPendingAction(null);
+    
+    const cancelMessage: ChatMessage = {
+      id: `cancel-${Date.now()}`,
+      text: 'Login cancelled. You can try again anytime!',
+      sender: 'nex',
+      timestamp: new Date()
+    };
+    setMessages(prev => [...prev, cancelMessage]);
+  };
+
+  // Pagination handlers
+  const handlePreviousPage = (messageIndex: number) => {
+    setMessagePagination(prev => {
+      const newMap = new Map(prev);
+      const currentPage = newMap.get(messageIndex) || 1;
+      if (currentPage > 1) {
+        newMap.set(messageIndex, currentPage - 1);
+      }
+      return newMap;
+    });
+  };
+
+  const handleNextPage = (messageIndex: number) => {
+    setMessagePagination(prev => {
+      const newMap = new Map(prev);
+      const currentPage = newMap.get(messageIndex) || 1;
+      newMap.set(messageIndex, currentPage + 1);
+      return newMap;
+    });
+  };
+
+  const getCurrentPageProducts = (products: Product[], messageIndex: number) => {
+    const currentPage = messagePagination.get(messageIndex) || 1;
+    const startIndex = (currentPage - 1) * 3;
+    const endIndex = startIndex + 3;
+    return products.slice(startIndex, endIndex);
   };
 
   const handleSendMessage = async (overrideText?: string) => {
@@ -414,7 +543,7 @@ export default function DraggableNexAssistant() {
                 ) : (
                   // Show messages when conversation has started
                   <div className="space-y-4">
-                    {messages.map((message) => (
+                    {messages.map((message, index) => (
                       <motion.div
                         key={message.id}
                         initial={{ opacity: 0, y: 20 }}
@@ -431,59 +560,130 @@ export default function DraggableNexAssistant() {
                         >
                           <p className="text-sm whitespace-pre-wrap">{message.text}</p>
                           
-                          {/* Product Cards */}
-                          {message.products && message.products.length > 0 && (
-                            <div className="mt-4 space-y-3">
-                              {message.products.slice(0, 3).map((product) => (
-                                <motion.div 
-                                  key={product.id} 
-                                  initial={{ opacity: 0, y: 10 }}
-                                  animate={{ opacity: 1, y: 0 }}
-                                  className="bg-white rounded-xl p-4 shadow-sm border border-gray-100/80 hover:shadow-lg hover:border-gray-200 transition-all duration-300"
-                                >
-                                  <div className="flex gap-4">
-                                    <div className="flex-shrink-0">
-                                      <img 
-                                        src={product.image} 
-                                        alt={product.title}
-                                        className="w-16 h-16 object-cover rounded-lg border border-gray-100"
-                                      />
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                      <h4 className="text-sm font-semibold text-gray-900 line-clamp-2 mb-2 leading-tight">
-                                        {product.title}
-                                      </h4>
-                                      <div className="flex items-center gap-3 mb-3">
-                                        <p className="text-lg font-bold text-emerald-600">
-                                          {product.displayPrice || `£${product.price}`}
-                                        </p>
-                                        {product.rating && (
-                                          <div className="flex items-center text-xs">
-                                            <span className="text-yellow-500">⭐</span>
-                                            <span className="text-gray-600 ml-1 font-medium">{product.rating.rate}</span>
-                                            <span className="text-gray-400 ml-1">({product.rating.count})</span>
+                          {/* Inline Login Form */}
+                          {showLoginForm && message.text.includes('You\'re not signed in!') && message.sender === 'nex' && (
+                            <div className="mt-4 p-4 bg-white rounded-lg border border-gray-200 shadow-sm">
+                              <div className="space-y-3">
+                                <div className="text-center">
+                                  <h4 className="text-sm font-semibold text-gray-900 mb-2">Quick Login</h4>
+                                  <p className="text-xs text-gray-600 mb-2">
+                                    Demo credentials: <br />
+                                    <button 
+                                      className="font-mono bg-gray-100 hover:bg-gray-200 px-2 py-1 rounded text-xs cursor-pointer transition-colors"
+                                      onClick={() => setLoginCredentials({ username: 'kevinryan', password: 'kev02937@' })}
+                                    >
+                                      kevinryan / kev02937@ (click to use)
+                                    </button>
+                                  </p>
+                                </div>
+                                <div className="space-y-2">
+                                  <Input
+                                    type="text"
+                                    placeholder="Username"
+                                    value={loginCredentials.username}
+                                    onChange={(e) => setLoginCredentials(prev => ({ ...prev, username: e.target.value }))}
+                                    className="h-8 text-xs border-gray-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                                  />
+                                  <Input
+                                    type="password"
+                                    placeholder="Password"
+                                    value={loginCredentials.password}
+                                    onChange={(e) => setLoginCredentials(prev => ({ ...prev, password: e.target.value }))}
+                                    className="h-8 text-xs border-gray-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+                                    onKeyPress={(e) => {
+                                      if (e.key === 'Enter') {
+                                        handleLogin();
+                                      }
+                                    }}
+                                  />
+                                </div>
+                                <div className="flex gap-2">
+                                  <Button
+                                    size="sm"
+                                    className="btn-primary h-7 px-3 text-xs flex-1"
+                                    onClick={handleLogin}
+                                    disabled={isLoggingIn}
+                                  >
+                                    {isLoggingIn ? 'Signing in...' : 'Sign In'}
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    className="btn-ghost h-7 px-3 text-xs"
+                                    onClick={handleCancelLogin}
+                                  >
+                                    Cancel
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                          
+                          {/* Product Cards with Pagination */}
+                          {message.products && message.products.length > 0 && (() => {
+                            const messageIndex = index;
+                            const currentPage = messagePagination.get(messageIndex) || 1;
+                            const totalPages = Math.ceil(message.products.length / 3);
+                            const currentPageProducts = getCurrentPageProducts(message.products, messageIndex);
+                            const startIndex = (currentPage - 1) * 3 + 1;
+                            const endIndex = Math.min(currentPage * 3, message.products.length);
+                            
+                            return (
+                              <div className="mt-4 space-y-3">
+                                {currentPageProducts.map((product) => (
+                                  <motion.div 
+                                    key={`${messageIndex}-${product.id}-${currentPage}`} 
+                                    initial={{ opacity: 0, y: 10 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    className="bg-white rounded-xl p-3 shadow-sm border border-gray-100/80 hover:shadow-lg hover:border-gray-200 transition-all duration-300"
+                                  >
+                                    <div className="space-y-3">
+                                      <div className="flex gap-3">
+                                        <div className="flex-shrink-0">
+                                          <img 
+                                            src={product.image} 
+                                            alt={product.title}
+                                            className="w-14 h-14 object-cover rounded-lg border border-gray-100"
+                                          />
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                          <h4 className="text-sm font-semibold text-gray-900 line-clamp-2 mb-1 leading-tight">
+                                            {product.title}
+                                          </h4>
+                                          <div className="flex items-center gap-2 mb-1">
+                                            <p className="text-base font-bold text-emerald-600">
+                                              {product.displayPrice || `£${product.price}`}
+                                            </p>
+                                            {product.rating && (
+                                              <div className="flex items-center text-xs">
+                                                <span className="text-yellow-500">⭐</span>
+                                                <span className="text-gray-600 ml-1 font-medium">{product.rating.rate}</span>
+                                              </div>
+                                            )}
                                           </div>
-                                        )}
+                                        </div>
                                       </div>
-                                      <div className="flex gap-2">
+                                      
+                                      {/* Moved buttons to full width row below */}
+                                      <div className="flex gap-2 items-center w-full">
                                         <Button
                                           size="sm"
-                                          className="btn-primary h-8 px-3 text-xs flex-1"
+                                          className="btn-primary h-7 px-3 text-xs flex-1 min-w-0"
                                           onClick={() => handleAddToCart(product)}
                                         >
-                                          <ShoppingCart className="w-3 h-3 mr-1" />
-                                          Add to Cart
+                                          <ShoppingCart className="w-3 h-3 mr-1 flex-shrink-0" />
+                                          <span className="truncate">Add to Cart</span>
                                         </Button>
                                         <Button
                                           size="sm"
-                                          className="btn-secondary h-8 px-2 text-xs"
+                                          className="btn-secondary h-7 w-7 p-0 flex-shrink-0 flex items-center justify-center"
                                           onClick={() => handleAddToWishlist(product)}
+                                          title="Add to Wishlist"
                                         >
                                           <Heart className="w-3 h-3" />
                                         </Button>
                                         <Button
                                           size="sm"
-                                          className="btn-ghost h-8 px-2 text-xs"
+                                          className="btn-ghost h-7 w-7 p-0 flex-shrink-0 flex items-center justify-center"
                                           onClick={() => router.push(`/products/${product.id}`)}
                                           title="View Details"
                                         >
@@ -491,28 +691,41 @@ export default function DraggableNexAssistant() {
                                         </Button>
                                       </div>
                                     </div>
+                                  </motion.div>
+                                ))}
+                                
+                                {/* Pagination Controls */}
+                                {totalPages > 1 && (
+                                  <div className="border-t border-gray-100 pt-3 mt-4">
+                                    <div className="flex items-center justify-between text-xs text-slate-600 mb-3">
+                                      <span>Showing {startIndex}-{endIndex} of {message.products.length} products</span>
+                                      <span>Page {currentPage} of {totalPages}</span>
+                                    </div>
+                                    <div className="flex gap-2 justify-center">
+                                      <Button
+                                        size="sm"
+                                        className={`h-7 px-3 text-xs ${currentPage <= 1 ? 'btn-ghost' : 'btn-secondary'}`}
+                                        disabled={currentPage <= 1}
+                                        onClick={() => handlePreviousPage(messageIndex)}
+                                      >
+                                        <ChevronLeft className="w-3 h-3 mr-1" />
+                                        Previous
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        className={`h-7 px-3 text-xs ${currentPage >= totalPages ? 'btn-ghost' : 'btn-secondary'}`}
+                                        disabled={currentPage >= totalPages}
+                                        onClick={() => handleNextPage(messageIndex)}
+                                      >
+                                        Next
+                                        <ChevronRight className="w-3 h-3 ml-1" />
+                                      </Button>
+                                    </div>
                                   </div>
-                                </motion.div>
-                              ))}
-                              {message.totalFound && message.totalFound > 3 && (
-                                <div className="text-center py-3 border-t border-gray-100 mt-4">
-                                  <p className="text-xs text-slate-500 mb-2">
-                                    Showing 3 of {message.totalFound} products
-                                  </p>
-                                  <Button
-                                    size="sm"
-                                    className="btn-secondary text-xs"
-                                    onClick={() => {
-                                      router.push('/products');
-                                      // Don't auto-close the assistant to keep it available
-                                    }}
-                                  >
-                                    View All {message.totalFound} Products
-                                  </Button>
-                                </div>
-                              )}
-                            </div>
-                          )}
+                                )}
+                              </div>
+                            );
+                          })()}
                           
                           <span className="text-xs opacity-70 mt-1 block">
                             {message.timestamp.toLocaleTimeString([], {
@@ -600,7 +813,7 @@ export default function DraggableNexAssistant() {
                           className="h-8 w-8 p-0 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors duration-200"
                           onClick={() => {
                             // Future image functionality
-                            const imageMessage = uiHandler.createErrorMessage("🖼️ Image search is coming soon! Try describing what you're looking for instead.");
+                            const imageMessage = uiHandler.createErrorMessage("Image search is coming soon! Try describing what you're looking for instead.");
                             setMessages(prev => [...prev, imageMessage]);
                           }}
                         >

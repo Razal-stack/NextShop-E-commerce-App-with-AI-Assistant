@@ -3,9 +3,8 @@ import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { InferenceChatModel } from "../lib/customLLM";
 import * as toolFactory from '../mcp/tools';
 import axios from 'axios';
-import redisClient from '../lib/redisClient';
 
-const AI_INFERENCE_URL = process.env.AI_INFERENCE_URL ?? 'http://localhost:8009';
+const AI_INFERENCE_URL = process.env.AI_INFERENCE_URL ?? 'http://localhost:8000';
 
 interface NexResponse {
     message: string;
@@ -16,33 +15,99 @@ interface NexResponse {
         cart?: any;
     };
     actions?: {
-        type: 'navigate' | 'filter_products' | 'add_to_cart' | 'add_to_wishlist';
+        type: 'navigate' | 'filter_products' | 'add_to_cart' | 'add_to_wishlist' | 'ui_handler';
         payload: any;
     }[];
+    executionPlan?: {
+        steps: ExecutionStep[];
+        requiresUserConfirmation?: boolean;
+    };
+    uiHandlers?: UIHandler[];
+}
+
+interface ExecutionStep {
+    step_number: number;
+    step_type: string; // "data_fetch", "filter", "search", "ui_action"
+    tool_name: string;
+    description: string;
+    parameters: any;
+    depends_on?: number[];
+    optional?: boolean;
+}
+
+interface UIHandler {
+    type: string; // "add_to_cart", "remove_from_cart", "login", "confirmation"
+    description: string;
+    data?: any;
+    requiresConfirmation?: boolean;
+}
+
+interface AppReasoningRequest {
+    app_name: string;
+    user_query: string;
+    available_categories?: string[];
+    conversation_history?: Array<{role: string, content: string, timestamp?: string}>;
+    mcp_tools_context?: any[];
+    ui_handlers_context?: any[];
+    current_filters?: any;
+    user_session?: any;
+}
+
+interface AppReasoningResponse {
+    query_analysis: {
+        intent: string;
+        confidence: number;
+        detected_entities: any;
+        requires_conversation_context: boolean;
+    };
+    execution_plan: ExecutionStep[];
+    fallback_response?: string;
+    expected_result_format: string;
+    ui_guidance?: string;
+    processing_time_ms: number;
+    model_used: string;
+    app_config_used: string;
 }
 
 export class AIService {
     private executor: AgentExecutor;
     private userId: number;
     private tools: any[];
+    private conversationHistory: Array<{role: string, content: string, timestamp: string}> = [];
+    private conversationContext: {
+        products: any[];
+        categories: string[];
+        priceRanges: Array<{min?: number, max?: number}>;
+        lastQuery: string;
+        lastIntent: string;
+    } = {
+        products: [],
+        categories: [],
+        priceRanges: [],
+        lastQuery: '',
+        lastIntent: ''
+    };
 
     constructor(userId: number) {
         this.userId = userId;
         const llm = new InferenceChatModel({});
         this.tools = Object.values(toolFactory).map(createTool => createTool(userId));
-        // Fix: Provide required input variables for agent prompt
+        
+        // Enhanced prompt for better reasoning
         const prompt = ChatPromptTemplate.fromMessages([
-          ["system", `You are NextShop's AI assistant. Your job is to select the right tools and parameters to answer user queries about products, carts, and orders. 
+          ["system", `You are NextShop's AI assistant. Your job is to analyze user queries and coordinate with our AI reasoning server for execution planning.
 
-Available tools:
-- products.list: Search for products by category, price, or keywords. Args: category (optional), priceMax (optional), query (optional)
-- cart.add: Add a product to cart. Args: productId (required), quantity (required)  
-- cart.get: View current cart contents. Args: none
-- cart.exportCSV: Export cart to CSV. Args: none
-- notifications.emailCart: Email cart summary. Args: email (required)
+Available MCP tools:
+${this.tools.map(tool => `- ${tool.name}: ${tool.description}`).join('\n')}
 
-Do not answer directly. Instead, specify which tool to call with exact tool names and arguments. Output only tool call instructions in JSON format, e.g.:
-{{"tool": "products.list", "args": {{"category": "electronics", "priceMax": 50}}}}`],
+Your role is to:
+1. Send complex queries to the AI reasoning server for execution planning
+2. Execute the planned steps using available MCP tools
+3. Handle simple queries directly
+4. Manage conversation context and user session
+5. Track products shown to users and conversation flow
+
+Always maintain context and provide helpful, accurate responses about products, shopping, and e-commerce tasks.`],
           ["human", "{input}"],
           ["ai", "{agent_scratchpad}"]
         ]);
@@ -51,105 +116,540 @@ Do not answer directly. Instead, specify which tool to call with exact tool name
     }
 
     public async run(query: string, conversationHistory: Array<{role: string, content: string}> = []): Promise<NexResponse> {
-      // Redis caching removed for development/testing
-      const result = await this.executor.invoke({ input: query });
-      
-      // Check if the result contains a tool call JSON
-      let toolCallResult = result.output;
-      
-      try {
-        // Try to parse the output as JSON tool call
-        const toolCall = JSON.parse(toolCallResult);
-        if (toolCall.tool && toolCall.args) {
-          // Find the matching tool and execute it
-          const matchingTool = this.tools.find(tool => tool.name === toolCall.tool);
-          
-          if (matchingTool) {
-            // Execute the tool with the provided args
-            const toolResult = await matchingTool.func(JSON.stringify(toolCall.args));
-            return this.formatResponse(query, toolCall.tool, toolResult);
-          }
+        // Update conversation history
+        this.conversationHistory = conversationHistory.map(msg => ({
+            ...msg,
+            timestamp: new Date().toISOString()
+        }));
+        
+        // Update conversation context
+        this.updateConversationContext(query, conversationHistory);
+        
+        try {
+            // First, get execution plan from AI reasoning server
+            const reasoningResponse = await this.getExecutionPlan(query, conversationHistory);
+            
+            // Check if we have a fallback response (out of scope or simple query)
+            if (reasoningResponse.fallback_response) {
+                return {
+                    message: reasoningResponse.fallback_response,
+                    displayMode: 'chat_only'
+                };
+            }
+            
+            // Execute the planned steps
+            if (reasoningResponse.execution_plan && reasoningResponse.execution_plan.length > 0) {
+                const result = await this.executeSteps(reasoningResponse.execution_plan, reasoningResponse.ui_guidance, query);
+                
+                // Update context with results
+                if (result.data?.products) {
+                    this.updateContextWithResults(result.data.products, reasoningResponse.query_analysis);
+                }
+                
+                return result;
+            }
+            
+            // Fallback to direct execution if no plan
+            return await this.directExecution(query);
+            
+        } catch (error) {
+            console.error('AI Service error:', error);
+            return {
+                message: "I apologize, but I'm having trouble processing your request right now. Could you please try rephrasing your question?",
+                displayMode: 'chat_only'
+            };
         }
-      } catch (e) {
-        // No fallback parsing - require proper AI server response
-        console.log('Failed to parse AI response as JSON tool call:', e);
-      }
-      
-      // Return simple response if no tool call was detected
-      return {
-        message: result.output,
-        displayMode: 'chat_only'
-      };
+    }
+    
+    private async getExecutionPlan(query: string, conversationHistory: Array<{role: string, content: string}>): Promise<AppReasoningResponse> {
+        console.log(`🔍 [AI Service] Getting execution plan for query: "${query}"`);
+        
+        // Get available categories from products
+        const availableCategories = await this.getAvailableCategories();
+        
+        // Prepare MCP tools context
+        const mcpToolsContext = this.tools.map(tool => ({
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.schema || {}
+        }));
+        
+        // Prepare UI handlers context
+        const uiHandlersContext = [
+            {
+                name: "add_to_cart",
+                description: "Add selected products to shopping cart",
+                requires_data: true,
+                data_format: "product_list"
+            },
+            {
+                name: "remove_from_cart", 
+                description: "Remove products from shopping cart",
+                requires_data: true,
+                data_format: "product_ids"
+            },
+            {
+                name: "show_product_details",
+                description: "Display detailed product information",
+                requires_data: true,
+                data_format: "product_id"
+            },
+            {
+                name: "login_required",
+                description: "Prompt user to login",
+                requires_data: false
+            },
+            {
+                name: "confirmation_required",
+                description: "Ask for user confirmation before proceeding",
+                requires_data: true,
+                data_format: "action_details"
+            }
+        ];
+        
+        const requestData: AppReasoningRequest = {
+            app_name: "nextshop",
+            user_query: query,
+            available_categories: availableCategories,
+            conversation_history: this.buildEnhancedConversationHistory(conversationHistory),
+            mcp_tools_context: mcpToolsContext,
+            ui_handlers_context: uiHandlersContext,
+            current_filters: {},
+            user_session: {
+                user_id: this.userId,
+                timestamp: new Date().toISOString(),
+                context: this.conversationContext
+            }
+        };
+        
+        const response = await axios.post(`${AI_INFERENCE_URL}/app-reason`, requestData, {
+            timeout: 60000, // Increased to 60 seconds for LLM processing
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        console.log(`🤖 [AI Service] Received execution plan from AI server:`, JSON.stringify(response.data, null, 2));
+        
+        return response.data;
+    }
+    
+    private async executeSteps(steps: ExecutionStep[], uiGuidance?: string, originalQuery?: string): Promise<NexResponse> {
+        let accumulatedData: any = {};
+        let products: any[] = [];
+        let uiHandlers: UIHandler[] = [];
+        let message = "";
+        let displayMode: 'chat_only' | 'auto_navigate' | 'dual_view' = 'chat_only';
+        
+        // Execute steps in order
+        for (const step of steps) {
+            try {
+                const result = await this.executeStep(step, accumulatedData);
+                accumulatedData[`step_${step.step_number}`] = result;
+                
+                // Process results based on step type
+                if (step.step_type === 'data_fetch' && result.success && result.products) {
+                    products = result.products;
+                }
+                
+                if (step.step_type === 'filter' && result.success && result.products) {
+                    products = result.products;
+                }
+                
+                if (step.step_type === 'search' && result.success && result.products) {
+                    products = result.products;
+                }
+                
+                if (step.step_type === 'ui_action') {
+                    uiHandlers.push({
+                        type: step.tool_name,
+                        description: step.description,
+                        data: step.parameters,
+                        requiresConfirmation: true
+                    });
+                }
+                
+            } catch (error) {
+                console.error(`Step ${step.step_number} failed:`, error);
+                // Continue with other steps unless critical
+                if (!step.optional) {
+                    return {
+                        message: `I encountered an issue while ${step.description.toLowerCase()}. Please try again.`,
+                        displayMode: 'chat_only'
+                    };
+                }
+            }
+        }
+        
+        // Format response based on results
+        if (products.length > 0) {
+            const totalFound = products.length;
+            message = `I found ${totalFound} products that match your request! `;
+            
+            // Only claim price filtering was applied if we actually have price constraints in the steps
+            const hassPriceFiltering = steps.some(step => 
+                step.parameters.priceMax !== undefined || 
+                step.parameters.priceMin !== undefined ||
+                step.parameters.budget !== undefined
+            );
+            
+            if (hassPriceFiltering && (originalQuery?.includes('under') || originalQuery?.includes('below'))) {
+                const priceMatch = originalQuery.match(/(\d+)/);
+                if (priceMatch) {
+                    const maxPrice = Math.max(...products.map(p => p.price));
+                    const requestedMax = parseInt(priceMatch[1]);
+                    if (maxPrice <= requestedMax) {
+                        message += `All items are under £${priceMatch[1]}. `;
+                    } else {
+                        message += `Here are the best matches within your budget. `;
+                    }
+                }
+            }
+            
+            message += `Here are the ${Math.min(products.length, 5)} best matches:`;
+            
+            displayMode = products.length > 3 ? 'auto_navigate' : 'dual_view';
+            
+            return {
+                message,
+                displayMode,
+                data: {
+                    products: products.slice(0, 10), // Limit display
+                    totalFound
+                },
+                actions: products.length > 3 ? [{
+                    type: 'navigate',
+                    payload: { page: '/products' }
+                }] : [],
+                executionPlan: { steps },
+                uiHandlers
+            };
+        }
+        
+        // Handle UI-only actions
+        if (uiHandlers.length > 0) {
+            return {
+                message: uiGuidance || "I've prepared some actions for you to review.",
+                displayMode: 'chat_only',
+                uiHandlers,
+                executionPlan: { 
+                    steps,
+                    requiresUserConfirmation: true
+                }
+            };
+        }
+        
+        // Default response
+        return {
+            message: message || "I've processed your request successfully!",
+            displayMode: 'chat_only',
+            executionPlan: { steps }
+        };
+    }
+    
+    private async executeStep(step: ExecutionStep, accumulatedData: any): Promise<any> {
+        console.log(`⚡ [AI Service] Executing step ${step.step_number}: ${step.description}`);
+        console.log(`📋 [AI Service] Step parameters:`, JSON.stringify(step.parameters, null, 2));
+        
+        // Find the matching MCP tool
+        const tool = this.tools.find(t => t.name === step.tool_name);
+        if (!tool) {
+            throw new Error(`Tool ${step.tool_name} not found`);
+        }
+        
+        // Prepare parameters, substituting templates from previous steps
+        let parameters = { ...step.parameters };
+        
+        // Replace template variables from previous step results
+        const paramStr = JSON.stringify(parameters);
+        const substituted = paramStr.replace(/\{\{(\w+)\}\}/g, (match, key) => {
+            if (key === 'previous_step_product_ids') {
+                const lastStepWithProducts: any = Object.values(accumulatedData)
+                    .reverse()
+                    .find((data: any) => data?.products?.length > 0);
+                return JSON.stringify(lastStepWithProducts?.products?.map((p: any) => p.id) || []);
+            }
+            if (key === 'final_product_list') {
+                const allProducts = Object.values(accumulatedData)
+                    .flatMap((data: any) => data?.products || []);
+                return JSON.stringify(allProducts);
+            }
+            return accumulatedData[key] || match;
+        });
+        
+        parameters = JSON.parse(substituted);
+        
+        console.log(`🔧 [AI Service] Final parameters after substitution:`, JSON.stringify(parameters, null, 2));
+        
+        // Execute the tool
+        const result = await tool.func(JSON.stringify(parameters));
+        const parsedResult = JSON.parse(result);
+        
+        console.log(`✅ [AI Service] Step result - Found ${parsedResult.products?.length || 0} products`);
+        if (parsedResult.products?.length > 0) {
+            console.log(`💰 [AI Service] Price range: £${Math.min(...parsedResult.products.map((p: any) => p.price))} - £${Math.max(...parsedResult.products.map((p: any) => p.price))}`);
+        }
+        
+        return parsedResult;
+    }
+    
+    private async getAvailableCategories(): Promise<string[]> {
+        try {
+            console.log('🔍 [AI Service] Fetching dynamic categories from MCP tools...');
+            
+            // Use the dedicated categories.list tool first
+            const categoresTool = this.tools.find(t => t.name.includes('categories.list'));
+            if (categoresTool) {
+                console.log('🏷️ [AI Service] Using dedicated categories.list tool');
+                const result = await categoresTool.func('{}');
+                const parsed = JSON.parse(result);
+                
+                if (parsed.success && parsed.categories && Array.isArray(parsed.categories)) {
+                    console.log('✅ [AI Service] Got dynamic categories from categories.list:', parsed.categories);
+                    return parsed.categories;
+                }
+            }
+            
+            // Fallback: Use the products.list tool to get categories dynamically
+            const productsTool = this.tools.find(t => t.name.includes('products.list'));
+            if (productsTool) {
+                console.log('🔧 [AI Service] Fallback: using products.list tool');
+                // Call with all products to get all categories
+                const result = await productsTool.func('{"limit": 50}');
+                const parsed = JSON.parse(result);
+                
+                if (parsed.availableCategories && Array.isArray(parsed.availableCategories)) {
+                    console.log('✅ [AI Service] Got dynamic categories from products.list:', parsed.availableCategories);
+                    return parsed.availableCategories;
+                }
+                
+                // Fallback - get categories from products
+                if (parsed.products && Array.isArray(parsed.products)) {
+                    const categories = [...new Set(parsed.products.map((p: any) => p.category).filter((cat: any): cat is string => typeof cat === 'string'))] as string[];
+                    console.log('✅ [AI Service] Extracted categories from products:', categories);
+                    return categories;
+                }
+            }
+            
+            console.log('⚠️ [AI Service] Tool-based category fetch failed, using dynamic API call');
+            
+            // Direct API call to fakestore to get all categories
+            const response = await axios.get('https://fakestoreapi.com/products/categories');
+            const apiCategories = response.data;
+            console.log('✅ [AI Service] Fetched categories from API:', apiCategories);
+            return apiCategories;
+            
+        } catch (error) {
+            console.error('❌ [AI Service] Failed to get dynamic categories:', error);
+            console.log('🔄 [AI Service] Using hardcoded fallback categories as last resort');
+        }
+        
+        // Last resort fallback - but this should rarely happen
+        return [
+            "men's clothing",
+            "women's clothing", 
+            "electronics",
+            "jewelery"
+        ];
+    }
+    
+    private async directExecution(query: string): Promise<NexResponse> {
+        // Fallback to original execution method for simple queries
+        const result = await this.executor.invoke({ input: query });
+        
+        try {
+            const toolCall = JSON.parse(result.output);
+            if (toolCall.tool && toolCall.args) {
+                const matchingTool = this.tools.find(tool => tool.name === toolCall.tool);
+                if (matchingTool) {
+                    const toolResult = await matchingTool.func(JSON.stringify(toolCall.args));
+                    return this.formatResponse(query, toolCall.tool, toolResult);
+                }
+            }
+        } catch (e) {
+            // Not a tool call
+        }
+        
+        return {
+            message: result.output,
+            displayMode: 'chat_only'
+        };
     }
 
     private formatResponse(query: string, toolName: string, toolResult: string): NexResponse {
-      try {
-        const parsedResult = JSON.parse(toolResult);
-        
-        if (toolName === 'products.list' && parsedResult.success && parsedResult.products) {
-          const products = parsedResult.products.slice(0, 10); // Limit to 10 products
-          const totalFound = parsedResult.products.length;
-          
-          let message = `I found ${totalFound} products`;
-          if (query.includes('under') || query.includes('below')) {
-            const priceMatch = query.match(/\$?(\d+)/);
-            if (priceMatch) message += ` under $${priceMatch[1]}`;
-          }
-          message += `! Here are the top ${Math.min(products.length, 5)}:`;
-
-          return {
-            message,
-            displayMode: products.length > 3 ? 'auto_navigate' : 'chat_only',
-            data: {
-              products,
-              totalFound
-            },
-            actions: products.length > 3 ? [{
-              type: 'navigate',
-              payload: { page: '/products' }
-            }] : []
-          };
-        }
-
-        if (toolName === 'cart.get' && parsedResult.success) {
-          const cartItems = parsedResult.cart?.products || [];
-          const message = cartItems.length > 0 
-            ? `Your cart has ${cartItems.length} item${cartItems.length > 1 ? 's' : ''}:`
-            : `Your cart is empty. Ready to start shopping?`;
-
-          return {
-            message,
-            displayMode: 'chat_only',
-            data: {
-              cart: parsedResult.cart
+        try {
+            const result = JSON.parse(toolResult);
+            
+            if (toolName.includes('products.list')) {
+                const products = result.success ? result.products : [];
+                const totalFound = products.length;
+                
+                // Smart response based on query context
+                let message = "";
+                let displayMode: 'chat_only' | 'auto_navigate' | 'dual_view' = 'chat_only';
+                
+                if (totalFound > 0) {
+                    message = `I found ${totalFound} products! `;
+                    
+                    // Check for price queries and verify actual product prices
+                    if (query.includes('under') || query.includes('below')) {
+                        const priceMatch = query.match(/(\d+)/);
+                        if (priceMatch) {
+                            const maxPrice = Math.max(...products.map((p: any) => p.price));
+                            const requestedMax = parseInt(priceMatch[1]);
+                            if (maxPrice <= requestedMax) {
+                                message += `All items are under £${priceMatch[1]}. `;
+                            } else {
+                                message += `Here are the best matches within your budget. `;
+                            }
+                        }
+                    }
+                    
+                    message += `Here are the best matches:`;
+                    displayMode = totalFound > 3 ? 'auto_navigate' : 'dual_view';
+                    
+                    return {
+                        message,
+                        displayMode,
+                        data: {
+                            products: products.slice(0, 10),
+                            totalFound
+                        },
+                        actions: totalFound > 3 ? [{
+                            type: 'navigate',
+                            payload: { page: '/products' }
+                        }] : []
+                    };
+                } else {
+                    return {
+                        message: "I couldn't find any products matching that criteria. Try different keywords or categories!",
+                        displayMode: 'chat_only'
+                    };
+                }
             }
-          };
+            
+            if (toolName.includes('cart.add')) {
+                if (result.success) {
+                    return {
+                        message: `Great! I've added the product to your cart. Your cart now has ${result.cartTotal} items.`,
+                        displayMode: 'chat_only',
+                        data: { cart: result.cart }
+                    };
+                } else {
+                    return {
+                        message: result.error || "I couldn't add that item to your cart. Please try again.",
+                        displayMode: 'chat_only'
+                    };
+                }
+            }
+            
+            if (toolName.includes('cart.get')) {
+                if (result.success && result.items && result.items.length > 0) {
+                    return {
+                        message: `You have ${result.items.length} items in your cart with a total of £${result.total.toFixed(2)}.`,
+                        displayMode: 'chat_only',
+                        data: { cart: result }
+                    };
+                } else {
+                    return {
+                        message: "Your cart is currently empty. Start shopping to add some products!",
+                        displayMode: 'chat_only'
+                    };
+                }
+            }
+            
+            if (toolName.includes('notifications.emailCart')) {
+                if (result.success) {
+                    return {
+                        message: `Perfect! I've sent your cart summary to ${result.email}. Check your inbox!`,
+                        displayMode: 'chat_only'
+                    };
+                } else {
+                    return {
+                        message: result.error || "I couldn't send the email. Please check the email address and try again.",
+                        displayMode: 'chat_only'
+                    };
+                }
+            }
+            
+            // Default response for other tools
+            return {
+                message: result.success ? 
+                    (result.message || "Task completed successfully!") :
+                    (result.error || "I encountered an issue processing that request."),
+                displayMode: 'chat_only',
+                data: result.data || {}
+            };
+            
+        } catch (error) {
+            console.error('Error parsing tool result:', error);
+            return {
+                message: "I completed the task, but had trouble formatting the response. Please check if everything looks correct.",
+                displayMode: 'chat_only'
+            };
         }
-
-        // Default fallback
-        return {
-          message: toolResult,
-          displayMode: 'chat_only'
-        };
-
-      } catch (e) {
-        return {
-          message: `Based on your query "${query}", here's what I found:\n\n${toolResult}`,
-          displayMode: 'chat_only'
-        };
-      }
     }
-    
+
     public async imageSearch(image_b64: string): Promise<NexResponse> {
         const response = await axios.post(`${AI_INFERENCE_URL}/describe-image`, { image_b64 });
         const caption = response.data.caption;
         if (!caption) {
-          return {
-            message: "I'm sorry, I couldn't understand that image.",
-            displayMode: 'chat_only'
-          };
+            return {
+                message: "I couldn't analyze that image. Please try a different image or ask about products in text.",
+                displayMode: 'chat_only'
+            };
         }
         const searchQuery = `Find products that look like: ${caption}. Also, tell the user you understood the image by mentioning what you saw.`;
         return this.run(searchQuery);
+    }
+
+    private updateConversationContext(query: string, conversationHistory: Array<{role: string, content: string}>) {
+        // Update last query and intent
+        this.conversationContext.lastQuery = query;
+        
+        // Extract categories from query
+        const queryLower = query.toLowerCase();
+        const categories = ["electronics", "men's clothing", "women's clothing", "jewelery"];
+        const detectedCategories = categories.filter(cat => queryLower.includes(cat.toLowerCase()));
+        if (detectedCategories.length > 0) {
+            this.conversationContext.categories = [...new Set([...this.conversationContext.categories, ...detectedCategories])];
+        }
+        
+        // Extract price constraints
+        const priceMatch = query.match(/under[£$€]?(\d+)|below[£$€]?(\d+)|less than[£$€]?(\d+)|above[£$€]?(\d+)|over[£$€]?(\d+)|more than[£$€]?(\d+)/i);
+        if (priceMatch) {
+            const price = parseInt(priceMatch[1] || priceMatch[2] || priceMatch[3] || priceMatch[4] || priceMatch[5] || priceMatch[6]);
+            const isMax = query.match(/under|below|less than/i);
+            const priceConstraint = isMax ? { max: price } : { min: price };
+            this.conversationContext.priceRanges.push(priceConstraint);
+        }
+        
+        console.log(`🧠 [AI Service] Updated conversation context:`, this.conversationContext);
+    }
+
+    private updateContextWithResults(products: any[], queryAnalysis: any) {
+        if (products && products.length > 0) {
+            // Keep last 10 products for context
+            this.conversationContext.products = [...products.slice(0, 10), ...this.conversationContext.products].slice(0, 10);
+            
+            // Update intent
+            if (queryAnalysis?.intent) {
+                this.conversationContext.lastIntent = queryAnalysis.intent;
+            }
+        }
+        
+        console.log(`📊 [AI Service] Updated context with ${products?.length || 0} products`);
+    }
+
+    private buildEnhancedConversationHistory(conversationHistory: Array<{role: string, content: string}>): Array<{role: string, content: string, metadata?: any}> {
+        return conversationHistory.map((msg, index) => ({
+            ...msg,
+            metadata: {
+                timestamp: new Date().toISOString(),
+                hasProducts: index > 0 ? this.conversationContext.products.length > 0 : false,
+                contextCategories: this.conversationContext.categories,
+                contextPriceRanges: this.conversationContext.priceRanges
+            }
+        }));
     }
 }

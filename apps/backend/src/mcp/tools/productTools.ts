@@ -5,14 +5,30 @@ import { QueryParser } from "../../utils/queryParser";
 import { ProductScoringEngine } from "../../utils/productScoring";
 
 const listProductsSchema = z.object({
+  // Simple parameters
   query: z.string().optional(),
   category: z.string().optional(),
+  categories: z.array(z.string()).optional(),
   limit: z.number().min(1).max(50).default(10),
   sort: z.enum(['asc', 'desc', 'rating', 'price-low', 'price-high', 'relevance']).default('relevance'),
   budget: z.number().optional(),
   minRating: z.number().min(0).max(5).optional(),
   priceMax: z.number().optional(),
-  priceMin: z.number().optional()
+  priceMin: z.number().optional(),
+  
+  // LLM analysis structure
+  intent: z.string().optional(),
+  confidence: z.number().optional(),
+  constraints: z.object({
+    price: z.object({
+      min: z.number().optional().nullable(),
+      max: z.number().optional().nullable(),
+    }).optional(),
+    rating: z.number().optional().nullable(),
+  }).optional(),
+  product_items: z.array(z.string()).optional(),
+  variants: z.array(z.string()).optional(), // Simple array of keywords
+  ui_handlers: z.array(z.any()).optional(),
 });
 
 export const createListProductsTool = (userId: number) =>
@@ -22,9 +38,13 @@ export const createListProductsTool = (userId: number) =>
     func: async (input: string) => {
       let searchData: any;
       try {
+        console.log(`🔧 [ProductTools] Raw input received: ${input}`);
         searchData = JSON.parse(input);
+        console.log(`🔧 [ProductTools] Parsed searchData:`, JSON.stringify(searchData, null, 2));
+        
         const parsed = listProductsSchema.safeParse(searchData);
         if (!parsed.success) {
+          console.log(`❌ [ProductTools] Schema validation failed:`, parsed.error);
           return JSON.stringify({
             success: false,
             error: "Invalid search parameters",
@@ -32,6 +52,7 @@ export const createListProductsTool = (userId: number) =>
           });
         }
         searchData = parsed.data;
+        console.log(`✅ [ProductTools] Schema validated, final searchData:`, JSON.stringify(searchData, null, 2));
       } catch (error) {
         return JSON.stringify({
           success: false,
@@ -42,159 +63,128 @@ export const createListProductsTool = (userId: number) =>
       try {
         const productService = new ProductService();
         
-        // ALWAYS initialize QueryParser with dynamic categories from the store
+        // Get ALL products first
+        const allProductsResult = await productService.getAllProducts();
+        let products = allProductsResult.success ? allProductsResult.data || [] : [];
+        
+        console.log(`📦 Start with ALL products: ${products.length}`);
+        
+        // Get all available categories for comparison
         const categoriesResult = await productService.getAllCategories();
-        const availableCategories = categoriesResult.success ? categoriesResult.data || [] : [];
-        await QueryParser.initialize(() => Promise.resolve(availableCategories));
+        const allCategories = categoriesResult.success ? categoriesResult.data || [] : [];
+        console.log(`📂 All available categories: ${JSON.stringify(allCategories)}`);
         
-        let products: any[] = [];
+        // Category filtering logic - only apply if specific categories requested
+        const llmCategories = searchData.categories;
+        const singleCategory = searchData.category;
         
-        // Get products based on category or get all products
-        if (searchData.category) {
-          const result = await productService.getProductsByCategory(searchData.category);
-          products = result.success ? result.data || [] : [];
-        } else {
-          const result = await productService.getAllProducts();
-          products = result.success ? result.data || [] : [];
+        if (singleCategory) {
+          products = products.filter((p: any) => p.category === singleCategory);
+          console.log(`📂 Applied single category "${singleCategory}": ${products.length} products`);
+        } else if (llmCategories && llmCategories.length > 0) {
+          // CRITICAL FIX: Only filter if LLM categories are SUBSET of all categories
+          const isSubset = llmCategories.length < allCategories.length && 
+                          llmCategories.every((cat: string) => allCategories.includes(cat));
+          
+          if (isSubset) {
+            products = products.filter((p: any) => llmCategories.includes(p.category));
+            console.log(`📂 Applied category subset ${llmCategories.join(', ')}: ${products.length} products`);
+          } else {
+            console.log(`📂 Skipped category filter (all categories requested or invalid subset)`);
+          }
         }
 
-        // If we have a search query, parse it and apply intelligent filtering
-        if (searchData.query && searchData.query.trim()) {
-          const parsedQuery = QueryParser.parseQuery(searchData.query);
-          
-          // Filter by categories if detected and not already specified
-          if (parsedQuery.categories.length > 0 && !searchData.category) {
-            products = products.filter((p: any) => 
-              parsedQuery.categories.some(cat => 
-                p.category.toLowerCase().includes(cat.toLowerCase())
-              )
-            );
-          }
-          
-          // Apply budget constraints (use query-parsed or explicit)
-          const budget = searchData.budget || searchData.priceMax || parsedQuery.constraints.budget;
-          if (budget) {
-            products = products.filter((p: any) => p.price <= budget);
-          }
-          
-          // Apply minimum price constraint
-          const minPrice = searchData.priceMin;
-          if (minPrice) {
-            products = products.filter((p: any) => p.price >= minPrice);
-          }
-          
-          // Apply rating constraints
-          const minRating = searchData.minRating || parsedQuery.constraints.rating;
-          if (minRating) {
-            products = products.filter((p: any) => p.rating.rate >= minRating);
-          }
-          
-          // Apply intelligent scoring and sorting
-          const intent = parsedQuery.intent === 'search_products' ? 'search_results' : 'general';
-          const scoringCriteria = ProductScoringEngine.createScoringCriteria(intent, {
-            budget,
-            searchQuery: searchData.query
-          });
-          
-          const scoredProducts = ProductScoringEngine.scoreAndSortProducts(
-            products, 
-            scoringCriteria, 
-            {
-              searchQuery: searchData.query,
-              userBudget: budget,
-              category: searchData.category
-            }
+        // IF constraints exist, apply them (prioritize nested price format)
+        const constraints = searchData.constraints;
+        const priceMax = constraints?.price?.max || constraints?.max || searchData.budget || searchData.priceMax;
+        const priceMin = constraints?.price?.min || constraints?.min || searchData.priceMin;
+        const ratingMin = constraints?.rating || searchData.minRating;
+        
+        if (priceMax) {
+          products = products.filter((p: any) => p.price <= priceMax);
+          console.log(`💰 Applied price max £${priceMax}: ${products.length} products`);
+        }
+        
+        if (priceMin) {
+          products = products.filter((p: any) => p.price >= priceMin);
+          console.log(`💰 Applied price min £${priceMin}: ${products.length} products`);
+        }
+        
+        if (ratingMin) {
+          products = products.filter((p: any) => p.rating.rate >= ratingMin);
+          console.log(`⭐ Applied rating min ${ratingMin}: ${products.length} products`);
+        }
+
+        // IF product items exist AND are specific products (not generic terms), apply search filter
+        const productItems = searchData.product_items || [];
+        
+        // Filter out product items that match category names (they're redundant)
+        const filteredProductItems = productItems.filter((item: string) => {
+          const itemLower = item.toLowerCase();
+          return !allCategories.some((category: string) => 
+            category.toLowerCase() === itemLower || 
+            category.toLowerCase().includes(itemLower) ||
+            itemLower.includes(category.toLowerCase())
           );
-          
-          const resultProducts = scoredProducts.slice(0, searchData.limit);
-          
-          return JSON.stringify({
-            success: true,
-            products: resultProducts,
-            totalFound: scoredProducts.length,
-            availableCategories,
-            query: searchData.query,
-            parsedQuery: {
-              intent: parsedQuery.intent,
-              categories: parsedQuery.categories,
-              productTypes: parsedQuery.productTypes,
-              constraints: parsedQuery.constraints,
-              suggestedActions: parsedQuery.suggestedActions,
-              confidence: parsedQuery.confidence,
-              reasoning: parsedQuery.reasoning
-            },
-            scoringApplied: true,
-            message: `Found ${resultProducts.length} products matching "${searchData.query}", ranked by relevance and quality.`
+        });
+        
+        const searchQuery = filteredProductItems.length > 0 ? filteredProductItems.join(' ') : (searchData.query || '');
+        
+        console.log(`🏷️ Product items: [${productItems.join(', ')}]`);
+        console.log(`🧹 Filtered items (removing category names): [${filteredProductItems.join(', ')}]`);
+        console.log(`🔍 Final search query: "${searchQuery}"`);
+        
+        // Skip search if query contains generic terms or is empty
+        const genericTerms = ['product', 'products', 'item', 'items', 'thing', 'things', 'stuff'];
+        const isGenericQuery = !searchQuery || genericTerms.some(term => 
+          searchQuery.toLowerCase().trim() === term || searchQuery.toLowerCase().includes(`${term} `)
+        );
+        
+        if (searchQuery && searchQuery.trim() && !isGenericQuery) {
+          const searchTerm = searchQuery.toLowerCase();
+          products = products.filter((p: any) => {
+            const title = p.title.toLowerCase();
+            const description = p.description.toLowerCase();
+            return title.includes(searchTerm) || description.includes(searchTerm);
           });
-        } else {
-          // No search query - apply simple filtering and sorting
-          let filteredProducts: any[] = products;
-          
-          // Apply budget filter
-          const budget = searchData.budget || searchData.priceMax;
-          if (budget) {
-            filteredProducts = filteredProducts.filter((p: any) => p.price <= budget);
-          }
-          
-          // Apply minimum price filter
-          if (searchData.priceMin) {
-            filteredProducts = filteredProducts.filter((p: any) => p.price >= searchData.priceMin);
-          }
-          
-          // Apply rating filter
-          if (searchData.minRating) {
-            filteredProducts = filteredProducts.filter((p: any) => p.rating.rate >= searchData.minRating);
-          }
-          
-          // Apply sorting
-          switch (searchData.sort) {
-            case 'price-low':
-              filteredProducts.sort((a: any, b: any) => a.price - b.price);
-              break;
-            case 'price-high':
-              filteredProducts.sort((a: any, b: any) => b.price - a.price);
-              break;
-            case 'rating':
-              filteredProducts.sort((a: any, b: any) => b.rating.rate - a.rating.rate);
-              break;
-            case 'asc':
-              filteredProducts.sort((a: any, b: any) => a.title.localeCompare(b.title));
-              break;
-            case 'desc':
-              filteredProducts.sort((a: any, b: any) => b.title.localeCompare(a.title));
-              break;
-            case 'relevance':
-            default:
-              // Apply general scoring for relevance
-              const scoringCriteria = ProductScoringEngine.createScoringCriteria('general', {
-                budget: budget
-              });
-              const scored = ProductScoringEngine.scoreAndSortProducts(
-                filteredProducts, 
-                scoringCriteria,
-                { userBudget: budget }
-              );
-              filteredProducts = scored;
-              break;
-          }
-          
-          const resultProducts = filteredProducts.slice(0, searchData.limit);
-          
-          return JSON.stringify({
-            success: true,
-            products: resultProducts,
-            totalFound: filteredProducts.length,
-            availableCategories,
-            filters: {
-              category: searchData.category,
-              budget: budget,
-              priceMin: searchData.priceMin,
-              minRating: searchData.minRating,
-              sort: searchData.sort
-            },
-            message: `Found ${resultProducts.length} products${searchData.category ? ` in ${searchData.category}` : ''}.`
+          console.log(`🔍 Applied search "${searchQuery}": ${products.length} products`);
+        } else if (searchQuery) {
+          console.log(`🔍 Skipped generic/empty search "${searchQuery}"`);
+        }
+
+        // IF variants exist, apply variant filter
+        const variants = searchData.variants || [];
+        
+        if (variants.length > 0) {
+          variants.forEach((variant: string) => {
+            const variantLower = variant.toLowerCase();
+            products = products.filter((p: any) => {
+              const title = p.title.toLowerCase();
+              const description = p.description.toLowerCase();
+              return title.includes(variantLower) || description.includes(variantLower);
+            });
+            console.log(`🎨 Applied variant "${variant}": ${products.length} products`);
           });
         }
+
+        // Final result - slice to limit
+        const finalProducts = products.slice(0, searchData.limit);
+        console.log(`✅ Final result: ${finalProducts.length} products (from ${products.length} total)`);
+        
+        return JSON.stringify({
+          success: true,
+          products: finalProducts,
+          totalFound: products.length,
+          query: searchQuery,
+          appliedFilters: {
+            categories: llmCategories || (singleCategory ? [singleCategory] : null),
+            constraints: { priceMax, priceMin, ratingMin },
+            searchQuery: searchQuery || null,
+            variants: variants.length > 0 ? variants : null
+          },
+          ui_handlers: searchData.ui_handlers || [],
+          message: `Found ${finalProducts.length} products${llmCategories ? ` in ${llmCategories.join(', ')}` : ''}${searchQuery ? ` matching "${searchQuery}"` : ''}${variants.length > 0 ? ` with variants: ${variants.join(', ')}` : ''}.`
+        });
         
       } catch (error) {
         return JSON.stringify({

@@ -25,7 +25,7 @@ export interface McpClient {
 }
 
 export function createMcpClient(token?: string | null): McpClient {
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3002';
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3001';
   
   const headers = {
     'Content-Type': 'application/json',

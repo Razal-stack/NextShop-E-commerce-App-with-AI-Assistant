@@ -130,14 +130,21 @@ export class AIAssistantUIHandler {
   }
 
   /**
-   * Build conversation history for API
+   * Build conversation history for API with product context
    */
-  buildConversationHistory(messages: ChatMessage[]): Array<{ role: string; content: string }> {
+  buildConversationHistory(messages: ChatMessage[]): Array<{ role: string; content: string; products?: any[]; timestamp?: string }> {
     return messages
       .filter(msg => msg.id !== 'typing-indicator') // Exclude typing indicator
       .map(msg => ({
         role: msg.sender === 'user' ? 'user' : 'assistant',
-        content: msg.text
+        content: msg.text,
+        products: msg.products || [],
+        timestamp: msg.timestamp?.toISOString() || new Date().toISOString(),
+        metadata: {
+          displayMode: msg.displayMode,
+          totalFound: msg.totalFound,
+          hasProducts: !!(msg.products && msg.products.length > 0)
+        }
       }));
   }
 

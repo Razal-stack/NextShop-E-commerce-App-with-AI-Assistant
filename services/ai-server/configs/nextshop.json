@@ -1,0 +1,83 @@
+{
+  "app_name": "nextshop",
+  "app_version": "1.0.0",
+  "description": "NextShop E-commerce AI Assistant - Dynamic Architecture",
+  "query_categories": [
+    "product_search",
+    "cart_management", 
+    "user_account",
+    "order_inquiry",
+    "recommendations",
+    "general_chat",
+    "out_of_scope"
+  ],
+  "supported_intents": [
+    "find_products",
+    "add_to_cart", 
+    "remove_from_cart",
+    "view_cart",
+    "product_details",
+    "price_comparison",
+    "recommendations",
+    "user_greeting",
+    "order_status",
+    "general_question"
+  ],
+  "mcp_tools": [],
+  "filter_constraints": [
+    {
+      "name": "price_range",
+      "type": "range",
+      "description": "Product price range",
+      "min_value": 0,
+      "max_value": 10000
+    },
+    {
+      "name": "rating",
+      "type": "range", 
+      "description": "Product rating",
+      "min_value": 1,
+      "max_value": 5
+    },
+    {
+      "name": "availability",
+      "type": "categorical",
+      "description": "Product availability",
+      "options": ["in_stock", "out_of_stock", "pre_order"]
+    },
+    {
+      "name": "brand",
+      "type": "categorical",
+      "description": "Product brand",
+      "options": []
+    }
+  ],
+  "ui_handlers": [],
+  "categories": [
+    "electronics",
+    "men's clothing",
+    "women's clothing",
+    "jewelery",
+    "home & garden",
+    "sports & outdoors",
+    "books",
+    "toys & games"
+  ],
+  "execution_flow": {
+    "greeting": ["respond_friendly", "offer_help"],
+    "product_search": ["analyze_query", "determine_filters", "execute_search", "format_results"],
+    "cart_action": ["verify_products", "check_permissions", "execute_action", "confirm_result"],
+    "out_of_scope": ["polite_decline", "suggest_alternatives"]
+  },
+  "response_templates": {
+    "product_search": "I found {count} products matching your criteria. Here are the best matches:",
+    "cart_success": "Successfully {action} {count} items to your cart.",
+    "out_of_scope": "I'm a shopping assistant for NextShop. I can help you find products, manage your cart, and answer shopping questions.",
+    "error": "I encountered an issue while processing your request. Please try again."
+  },
+  "ai_scope": "I am a NextShop AI assistant focused on helping customers find, compare, and purchase products. I can search products, apply filters, check availability, and guide you through the shopping process.",
+  "fallback_message": "I'm here to help you with shopping on NextShop. I can help you find products, check prices, and guide you through your purchase. For general questions outside of shopping, I'd recommend asking elsewhere.",
+  "max_steps": 6,
+  "include_conversation_history": true,
+  "max_conversation_turns": 10
+}

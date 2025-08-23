@@ -1,156 +1,164 @@
-# NextShop AI Inference Server
+# Generic AI Reasoning Server
 
-## Overview
+A minimal, cross-platform AI reasoning server that automatically detects and uses local AI models from the `models/` folder.
 
-This is the **AI Inference Server** for the NextShop AI Assistant "Nex". It's a specialized FastAPI microservice that provides AI model inference capabilities to the main Express.js MCP Server.
+## Key Features
 
-### Architecture Role
+- **Auto-Model Detection**: Automatically finds and uses models from `models/` folder
+- **Cross-Platform**: Works on Windows, Mac, and Linux
+- **Generic & Dynamic**: No hardcoded business logic - adaptable for any use case
+- **Minimal Dependencies**: Only essential packages
+- **Mock Mode**: Works even without models for testing
 
-- **What it does**: Provides AI model inference (text generation + image description)
-- **What it doesn't do**: Business logic, MCP tools, user management, or decision making
-- **Communication**: Called by Express.js MCP Server via HTTP when AI computation is needed
+## Quick Start
 
-## Models Used
+### 1. Setup Environment
+```bash
+# Windows
+python -m venv venv
+venv\Scripts\activate
 
-- **Language Model**: `microsoft/phi-2` - For text generation and reasoning
-- **Vision Model**: `Salesforce/blip-image-captioning-base` - For image description
+# Mac/Linux
+python -m venv venv
+source venv/bin/activate
 
-## API Endpoints
-
-### POST `/api/v1/generate`
-Generates text using the Phi-2 language model.
-
-**Request:**
-```json
-{
-  "prompt": "Your text prompt here"
-}
+pip install -r requirements.txt
 ```
 
-**Response:**
-```json
-{
-  "response": "Generated text response"
-}
-```
-
-### POST `/api/v1/describe-image`
-Describes an image using the BLIP vision model.
-
-**Request:**
-```json
-{
-  "image_b64": "base64_encoded_image_string"
-}
-```
-
-**Response:**
-```json
-{
-  "caption": "Description of the image"
-}
-```
-
-### GET `/health`
-Health check endpoint to verify model loading status.
-
-## Setup Instructions
-
-### Prerequisites
-
-1. **Python 3.12+** installed with "Add Python.exe to PATH" checked
-2. **Visual Studio Code** with Python extension (recommended)
-
-### Quick Setup
-
-1. Run the setup script:
-   ```powershell
-   .\services\ai-server\setup.ps1
-   ```
-
-### Manual Setup
-
-1. Navigate to the AI server directory:
-   ```powershell
-   cd services\ai-server
-   ```
-
-2. Create and activate virtual environment:
-   ```powershell
-   python -m venv venv
-   .\venv\Scripts\Activate.ps1
-   ```
-
-3. Install dependencies:
-   ```powershell
-   pip install -r requirements.txt
-   ```
-
-4. Start the server:
-   ```powershell
-   uvicorn main:app --reload --port 8009
-   ```
-
-## Development
-
-### Project Structure
+### 2. Add Your Models
+Place your AI models in the `models/` folder:
 
 ```
-services/ai-server/
-├── main.py              # FastAPI application entry point
-├── requirements.txt     # Python dependencies
-├── .env                # Environment variables
-├── setup.ps1           # Automated setup script
-└── app/
-    ├── __init__.py     # Python package marker
-    ├── models.py       # Model loading and management
-    ├── schemas.py      # Pydantic request/response schemas
-    └── api/
-        ├── __init__.py # Python package marker
-        └── endpoints.py # API route definitions
+models/
+├── my-chat-model/          # HuggingFace model folder
+│   ├── config.json
+│   ├── model.safetensors
+│   └── tokenizer.json
+├── vision-model.bin        # Vision model file
+└── language-model.gguf     # GGUF format model
 ```
 
-### Key Features
+Supported formats:
+- **HuggingFace folders** (with config.json)
+- **GGUF files** (.gguf)
+- **PyTorch files** (.bin, .pt, .pth)
+- **SafeTensors** (.safetensors)
 
-- **Model Preloading**: Models are loaded once at startup for fast inference
-- **GPU Support**: Automatically uses CUDA if available
-- **Health Monitoring**: Health check endpoint for monitoring
-- **API Documentation**: Auto-generated docs at `/docs`
-- **Error Handling**: Comprehensive error handling and logging
+### 3. Start Server
+```bash
+python main.py
+# or
+.\start.bat    # Windows
+.\start.ps1    # PowerShell
+```
 
-## Integration with MCP Server
+Server runs at `http://localhost:8000`
 
-The Express.js MCP Server will call this AI Inference Server via HTTP:
+## API Usage
 
-1. **Text Generation**: MCP Server sends prompts to `/api/v1/generate` for LangChain agent reasoning
-2. **Image Analysis**: MCP Server sends images to `/api/v1/describe-image` for image search functionality
+### Text Reasoning
+```bash
+curl -X POST http://localhost:8000/reason \
+  -H "Content-Type: application/json" \
+  -d '{
+    "instruction": "Analyze this customer query and suggest actions",
+    "context": "Customer wants to return item after 60 days",
+    "task_type": "customer_support"
+  }'
+```
 
-## Performance Notes
+### Image Analysis
+```bash
+curl -X POST http://localhost:8000/reason-image \
+  -H "Content-Type: application/json" \
+  -d '{
+    "instruction": "What products are in this image?",
+    "image_data": "base64-encoded-image-data",
+    "context": "Customer wants similar products"
+  }'
+```
 
-- **First Startup**: Takes 5-15 minutes to download and load models
-- **Subsequent Startups**: ~1-2 minutes to load models from cache
-- **Inference Speed**: Fast after models are loaded (subsecond responses)
-- **Memory Usage**: ~4-8GB RAM depending on model size and GPU availability
+### Health Check
+```bash
+curl http://localhost:8000/health
+```
 
-## Troubleshooting
+## Model Auto-Detection
 
-### Common Issues
+The server automatically:
 
-1. **Import errors**: Make sure virtual environment is activated
-2. **Model loading errors**: Check internet connection for first download
-3. **CUDA errors**: GPU drivers may need updating
-4. **Port conflicts**: Ensure port 8009 is available
+1. **Scans `models/` folder** for supported formats
+2. **Detects model types** (text, vision, etc.)
+3. **Selects best model** based on size and type
+4. **Falls back to mock mode** if no models found
 
-### Logs
+**Example log output:**
+```
+INFO - Found 2 models in models/ directory
+INFO -   - llama-7b-chat (huggingface, 13420.5MB)
+INFO -   - vision-model (vision, 2100.3MB)
+INFO - Loading text model: llama-7b-chat (huggingface)
+INFO - Text model loaded successfully on cuda
+```
 
-Check the console output for detailed startup and error logs.
+## Integration Example
 
-## Production Deployment
+Use with your backend (Express.js + LangChain):
 
-For production deployment, consider:
+```javascript
+// Your backend passes context and instructions
+const aiResponse = await fetch('http://localhost:8000/reason', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+        instruction: "Analyze this user query and determine which tools to use",
+        context: `
+            User Query: "${userMessage}"
+            Available MCP Tools: ${JSON.stringify(availableTools)}
+            User Session: ${JSON.stringify(userContext)}
+            Previous Actions: ${JSON.stringify(previousActions)}
+        `,
+        task_type: "tool_selection",
+        parameters: {
+            max_tokens: 256,
+            temperature: 0.7
+        }
+    })
+});
 
-- Using a process manager like PM2 or systemd
-- Configuring proper logging
-- Setting up health check monitoring
-- Using a reverse proxy (nginx)
-- Optimizing for your specific hardware (GPU/CPU)
+const reasoning = await aiResponse.json();
+// Use reasoning.result to decide which MCP tools to call
+const recommendedActions = parseAIResponse(reasoning.result);
+```
+
+## Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HOST` | `127.0.0.1` | Server host |
+| `PORT` | `8000` | Server port |
+| `DEBUG` | `true` | Debug mode |
+| `MAX_TOKENS` | `512` | Default response length |
+| `TEMPERATURE` | `0.7` | Creativity level |
+| `DEVICE` | `auto` | Hardware: auto/cpu/cuda |
+
+## Architecture Benefits
+
+- **Separation of Concerns**: AI server only does reasoning
+- **Reusable**: Use same server for different applications
+- **Scalable**: Can run on separate machines
+- **Testable**: Mock mode allows testing without models
+- **Flexible**: Works with various model formats
+
+## No Models? No Problem!
+
+If no models are found, the server runs in **mock mode**:
+- Provides intelligent mock responses
+- Useful for development and testing
+- Same API, just simulated responses
+
+This ensures your backend integration works even before you have models.
+
+---
+
+**Philosophy**: Keep AI server generic. Let your backend provide all the context and business logic.

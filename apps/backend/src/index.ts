@@ -3,7 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import axios from 'axios';
 import { createMCPServer } from './mcp/server';
-import apiRoutes from './routes/index';
+import apiRoutes from './routes/indexNew'; // ✅ Using new LangChain orchestration routes
 
 dotenv.config();
 

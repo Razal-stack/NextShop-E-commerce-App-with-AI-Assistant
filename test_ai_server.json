@@ -1,0 +1,19 @@
+{
+  "app_name": "nextshop",
+  "user_query": "Find electronics under £100",
+  "available_categories": ["electronics", "men's clothing", "women's clothing", "jewelery"],
+  "conversation_history": [],
+  "mcp_tools_context": [
+    {
+      "name": "products.list",
+      "description": "Search and list products with intelligent scoring and filtering",
+      "parameters": {}
+    }
+  ],
+  "ui_handlers_context": [],
+  "current_filters": {},
+  "user_session": {
+    "user_id": 1,
+    "timestamp": "2025-08-23T00:00:00Z"
+  }
+}

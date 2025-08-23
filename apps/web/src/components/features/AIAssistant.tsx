@@ -232,14 +232,20 @@ const AIAssistant: React.FC = () => {
         type: 'assistant' as const,
         content: response.message,
         timestamp: new Date(),
-        products: response.products,
-        searchQuery: response.searchQuery
+        products: response.data?.products || response.products, // Handle both old and new format
+        searchQuery: response.searchQuery,
+        displayMode: response.displayMode,
+        totalFound: response.data?.totalFound
       };
 
       addMessage(currentSessionId!, assistantMessage);
 
-      if (response.products && response.products.length > 0) {
-        toast.success(`Found ${response.products.length} products!`);
+      // Handle navigation if auto_navigate mode
+      if (response.displayMode === 'auto_navigate' && response.data?.products?.length > 0) {
+        toast.success(`Found ${response.data.totalFound || response.data.products.length} products! Showing results...`);
+        // Could add navigation logic here if needed
+      } else if (response.data?.products && response.data.products.length > 0) {
+        toast.success(`Found ${response.data.totalFound || response.data.products.length} products!`);
       }
 
     } catch (error) {
