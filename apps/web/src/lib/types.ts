@@ -36,6 +36,22 @@ export const UserSessionSchema = z.object({
   userId: z.number(),
   username: z.string(),
   isAuthenticated: z.boolean(),
+  email: z.string().optional(),
+  name: z.object({
+    firstname: z.string(),
+    lastname: z.string(),
+  }).optional(),
+  phone: z.string().optional(),
+  address: z.object({
+    city: z.string(),
+    street: z.string(),
+    number: z.number(),
+    zipcode: z.string(),
+    geolocation: z.object({
+      lat: z.string(),
+      long: z.string(),
+    }),
+  }).optional(),
 });
 
 export type UserSession = z.infer<typeof UserSessionSchema>;

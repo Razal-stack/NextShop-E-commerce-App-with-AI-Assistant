@@ -81,6 +81,10 @@ interface UserStore {
   setSession: (session: UserSession) => void;
   clearSession: () => void;
   isAuthenticated: () => boolean;
+  // Convenience getters
+  getUser: () => UserSession | null;
+  getToken: () => string | null;
+  getUserId: () => number | null;
 }
 
 interface UIStore {
@@ -218,15 +222,15 @@ export const useChatHistoryStore = create<ChatHistoryStore>()(
           
           // Auto-generate title based on content
           if (firstUserMessage.toLowerCase().includes('find') || firstUserMessage.toLowerCase().includes('search')) {
-            return `🔍 ${firstUserMessage.substring(0, 25)}...`;
+            return `Search: ${firstUserMessage.substring(0, 25)}...`;
           }
           if (firstUserMessage.toLowerCase().includes('product') || firstUserMessage.toLowerCase().includes('buy')) {
-            return `🛍️ ${firstUserMessage.substring(0, 25)}...`;
+            return `${firstUserMessage.substring(0, 25)}...`;
           }
           if (firstUserMessage.toLowerCase().includes('help')) {
             return `❓ ${firstUserMessage.substring(0, 25)}...`;
           }
-          return `💬 ${firstUserMessage.substring(0, 25)}...`;
+          return `${firstUserMessage.substring(0, 25)}...`;
         },
         clearAllSessions: () => set({ sessions: [], currentSessionId: null }),
       }),
@@ -247,14 +251,15 @@ export const useCartStore = create<CartStore>()(
         pendingItems: [],
         addItem: async (product, quantity = 1) => {
           const userStore = useUserStore.getState();
-          const authStore = useAuthStore.getState();
           
           if (!userStore.isAuthenticated()) {
-            // Add to pending items and prompt for authentication
+            // Add to pending items and require authentication
             set((state) => ({
               pendingItems: [...state.pendingItems.filter(p => p.id !== product.id), product]
             }));
-            authStore.setAuthModalOpen(true);
+            // Just show a toast - no auth modal since we're simplifying
+            const { toast } = require('sonner');
+            toast.info('Please sign in to add items to your cart');
             return false;
           }
           
@@ -332,14 +337,15 @@ export const useWishlistStore = create<WishlistStore>()(
         pendingItems: [],
         addItem: async (product) => {
           const userStore = useUserStore.getState();
-          const authStore = useAuthStore.getState();
           
           if (!userStore.isAuthenticated()) {
-            // Add to pending items and prompt for authentication
+            // Add to pending items and require authentication
             set((state) => ({
               pendingItems: [...state.pendingItems.filter(p => p.id !== product.id), product]
             }));
-            authStore.setAuthModalOpen(true);
+            // Just show a toast - no auth modal since we're simplifying
+            const { toast } = require('sonner');
+            toast.info('Please sign in to add items to your wishlist');
             return false;
           }
           
@@ -379,9 +385,28 @@ export const useUserStore = create<UserStore>()(
     persist(
       (set, get) => ({
         session: null,
-        setSession: (session) => set({ session }),
-        clearSession: () => set({ session: null }),
-        isAuthenticated: () => !!get().session?.isAuthenticated,
+        setSession: (session) => {
+          set({ session });
+          // Notify all components about auth state change
+          setTimeout(() => {
+            window.dispatchEvent(new Event('auth-state-changed'));
+          }, 0);
+        },
+        clearSession: () => {
+          set({ session: null });
+          // Notify all components about auth state change
+          setTimeout(() => {
+            window.dispatchEvent(new Event('auth-state-changed'));
+          }, 0);
+        },
+        isAuthenticated: () => {
+          const session = get().session;
+          return !!session?.isAuthenticated && !!session?.token;
+        },
+        // Convenience getters for easy access
+        getUser: () => get().session,
+        getToken: () => get().session?.token || null,
+        getUserId: () => get().session?.userId || null,
       }),
       {
         name: 'nextshop-user',

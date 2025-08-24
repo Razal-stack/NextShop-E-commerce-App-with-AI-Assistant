@@ -3,8 +3,7 @@
  */
 
 import { Product, ProductFilters } from '../types';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
+import httpService from './httpService';
 
 export class ProductService {
   /**
@@ -17,38 +16,26 @@ export class ProductService {
     if (filters?.sort) params.append('sort', filters.sort);
     if (filters?.category) params.append('category', filters.category);
 
-    const url = `${API_BASE}/products${params.toString() ? `?${params.toString()}` : ''}`;
+    const endpoint = `/products${params.toString() ? `?${params.toString()}` : ''}`;
     
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch products: ${response.statusText}`);
-    }
-    
-    return response.json();
+    const response = await httpService.get<Product[]>(endpoint);
+    return response.data;
   }
 
   /**
    * Get a single product by ID
    */
   static async getProduct(id: number): Promise<Product> {
-    const response = await fetch(`${API_BASE}/products/${id}`);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch product: ${response.statusText}`);
-    }
-    
-    return response.json();
+    const response = await httpService.get<Product>(`/products/${id}`);
+    return response.data;
   }
 
   /**
    * Get all product categories
    */
   static async getCategories(): Promise<string[]> {
-    const response = await fetch(`${API_BASE}/products/categories`);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch categories: ${response.statusText}`);
-    }
-    
-    return response.json();
+    const response = await httpService.get<string[]>('/products/categories');
+    return response.data;
   }
 
   /**
@@ -64,12 +51,14 @@ export class ProductService {
   static getImageUrl(originalUrl: string): string {
     if (!originalUrl) return '';
     
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
+    
     // If it's already a backend URL, return as is
-    if (originalUrl.startsWith(API_BASE)) {
+    if (originalUrl.startsWith(apiBase)) {
       return originalUrl;
     }
     
     // Convert external image URL to backend proxy
-    return `${API_BASE}/images/proxy?url=${encodeURIComponent(originalUrl)}`;
+    return `${apiBase}/images/proxy?url=${encodeURIComponent(originalUrl)}`;
   }
 }

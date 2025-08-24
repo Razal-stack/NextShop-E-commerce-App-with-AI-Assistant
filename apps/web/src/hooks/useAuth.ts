@@ -80,8 +80,20 @@ export function useAuth() {
         const storedUser = localStorage.getItem('nextshop_user');
         
         if (storedToken && storedUser) {
+          const userData = JSON.parse(storedUser);
+          
+          // Update local state
           setToken(storedToken);
-          setUser(JSON.parse(storedUser));
+          setUser(userData);
+          
+          // MOST IMPORTANT: Update UserStore as the primary source of truth
+          const { useUserStore } = require('../lib/store');
+          useUserStore.getState().setSession({
+            token: storedToken,
+            userId: userData.id,
+            isAuthenticated: true,
+            ...userData
+          });
         }
       } catch (error) {
         console.error('Error initializing auth:', error);
@@ -125,6 +137,17 @@ export function useAuth() {
       // Fetch the full user data using the REAL userId from JWT token
       const userData = await UserService.getUser(realUserId);
       
+      // Update UserStore for immediate UI updates
+      const { useUserStore } = await import('../lib/store');
+      const userStore = useUserStore.getState();
+      userStore.setSession({
+        token: result.token,
+        userId: realUserId,
+        isAuthenticated: true,
+        ...userData
+      });
+      
+      // Update local state as well for this hook
       setToken(result.token);
       setUser(userData);
       
@@ -143,12 +166,14 @@ export function useAuth() {
       // Additional force update after a short delay
       setTimeout(() => {
         forceUpdate();
+        // Trigger global state update
+        window.dispatchEvent(new Event('auth-state-changed'));
       }, 50);
       
       // Show personalized welcome message with real user name
       const firstName = userData.name?.firstname || userData.username;
       const displayName = firstName.charAt(0).toUpperCase() + firstName.slice(1);
-      toast.success(`Welcome back, ${displayName}! 🎉`, {
+      toast.success(`Welcome back, ${displayName}!`, {
         description: "Loading your cart and preferences...",
         duration: 3000
       });
@@ -229,13 +254,7 @@ export function useAuth() {
         // Don't fail login if cart loading fails
       }
       
-      // Login completed successfully
-      
-      // Force page refresh to ensure all components update with new auth state
-      setTimeout(() => {
-        window.location.reload();
-      }, 500);
-      
+      // Login completed successfully - no page refresh needed!
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Login failed';
@@ -271,11 +290,17 @@ export function useAuth() {
   }, [isLoading]);
 
   const logout = useCallback(() => {
-    // Clear user session
+    // Clear local state
     setUser(null);
     setToken(null);
+    
+    // Clear localStorage
     localStorage.removeItem('nextshop_token');
     localStorage.removeItem('nextshop_user');
+    
+    // Update UserStore - primary source of truth
+    const { useUserStore } = require('../lib/store');
+    useUserStore.getState().clearSession();
     
     // Clear cart and wishlist
     clearCart();

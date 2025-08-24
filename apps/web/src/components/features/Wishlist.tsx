@@ -3,9 +3,8 @@
 import React, { useState } from 'react';
 import { Heart } from 'lucide-react';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { useUIStore, useWishlistStore, useCartStore } from '@/lib/store';
+import { useUIStore, useWishlistStore, useCartStore, useUserStore } from '@/lib/store';
 import { useCart } from '@/hooks/useCart';
-import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'sonner';
 import { useRouter } from 'next/navigation';
 import { EmptyState, ListHeader } from '@/components/shared';
@@ -17,7 +16,11 @@ export default function Wishlist() {
   const { items: wishlist, removeItem } = useWishlistStore();
   const { addItem: addToCart } = useCart(); // Use unified cart hook for backend sync
   const { items: cart } = useCartStore(); // Keep for local cart display
-  const { isAuthenticated } = useAuth();
+  
+  // SINGLE SOURCE OF TRUTH for authentication - UserStore only
+  const { isAuthenticated: isAuthenticatedFn } = useUserStore();
+  const isAuthenticated = isAuthenticatedFn();
+  
   const [showAuthModal, setShowAuthModal] = useState(false);
   const router = useRouter();
 

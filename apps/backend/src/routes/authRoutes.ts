@@ -9,5 +9,5 @@ const authController = new AuthController();
 // POST /api/auth/login - User authentication (FakeStore standard)
 router.post('/login', validateBody(LoginSchema), authController.loginUser);
 
-const authRoutes = router;
+const authRoutes: Router = router;
 export default authRoutes;

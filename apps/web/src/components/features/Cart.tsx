@@ -8,9 +8,8 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { useUIStore, useCartStore } from "@/lib/store";
+import { useUIStore, useCartStore, useUserStore } from "@/lib/store";
 import { useCart } from "@/hooks/useCart";
-import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { EmptyState, ListHeader } from "@/components/shared";
@@ -24,7 +23,11 @@ export default function Cart() {
     updateQuantity, 
     removeItem
   } = useCart(); // Use unified cart hook for operations
-  const { isAuthenticated } = useAuth();
+  
+  // SINGLE SOURCE OF TRUTH for authentication - UserStore only
+  const { isAuthenticated: isAuthenticatedFn } = useUserStore();
+  const isAuthenticated = isAuthenticatedFn();
+  
   const [showAuthModal, setShowAuthModal] = useState(false);
   const router = useRouter();
 

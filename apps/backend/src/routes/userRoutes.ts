@@ -25,5 +25,5 @@ router.put('/:id',
 // DELETE /api/users/:id - Delete user (FakeStore standard)
 router.delete('/:id', validateParams(ProductIdSchema), userController.deleteUser);
 
-const userRoutes = router;
+const userRoutes: Router = router;
 export default userRoutes;

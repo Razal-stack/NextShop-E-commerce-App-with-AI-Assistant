@@ -1,55 +1,57 @@
-# Generic AI Reasoning Server
+# AI Server - Simple Setup Like Your Webapp
 
-A minimal, cross-platform AI reasoning server that automatically detects and uses local AI models from the `models/` folder.
+## Prerequisites
 
-## Key Features
+- **Python 3.13+** (that's it!)
+- Check: `python --version` should show 3.13 or higher
 
-- **Auto-Model Detection**: Automatically finds and uses models from `models/` folder
-- **Cross-Platform**: Works on Windows, Mac, and Linux
-- **Generic & Dynamic**: No hardcoded business logic - adaptable for any use case
-- **Minimal Dependencies**: Only essential packages
-- **Mock Mode**: Works even without models for testing
+## Quick Start (Just Like `pnpm i` and `pnpm dev`)
 
-## Quick Start
-
-### 1. Setup Environment
 ```bash
-# Windows
-python -m venv venv
-venv\Scripts\activate
+# 1. Install dependencies (like 'pnpm i')
+python install.py
 
-# Mac/Linux
-python -m venv venv
-source venv/bin/activate
-
-pip install -r requirements.txt
+# 2. Start development server (like 'pnpm dev') 
+python dev.py
 ```
 
-### 2. Add Your Models
-Place your AI models in the `models/` folder:
+**That's it!** Server runs at `http://localhost:8000`
+
+### What Each Script Does
+
+- `install.py` = `pnpm i` for Python (creates venv, installs all dependencies)
+- `dev.py` = `pnpm dev` for Python (starts development server with hot reload)
+
+### Works Immediately
+
+- All dependencies included - no missing packages
+- Works without AI models (mock mode for testing)
+- Hot reload enabled - code changes restart server automatically  
+- No manual setup needed - scripts handle everything
+
+### Troubleshooting
+
+**"python: command not found"**  
+- Install Python 3.8+ from https://python.org
+- Make sure Python is in your PATH
+
+**"Python 3.x required"**  
+- You have Python 2.x or older
+- Install Python 3.8+ from https://python.org
+
+**Installation fails**  
+- Make sure you have internet connection (downloads packages)
+- Try running as administrator (Windows) or with sudo (Mac/Linux)
+
+### If You Want Real AI Models (Optional)
+
+Add models to `models/` folder and they'll be auto-detected:
 
 ```
 models/
-├── my-chat-model/          # HuggingFace model folder
-│   ├── config.json
-│   ├── model.safetensors
-│   └── tokenizer.json
-├── vision-model.bin        # Vision model file
-└── language-model.gguf     # GGUF format model
-```
-
-Supported formats:
-- **HuggingFace folders** (with config.json)
-- **GGUF files** (.gguf)
-- **PyTorch files** (.bin, .pt, .pth)
-- **SafeTensors** (.safetensors)
-
-### 3. Start Server
-```bash
-python main.py
-# or
-.\start.bat    # Windows
-.\start.ps1    # PowerShell
+├── my-model.gguf          # GGUF format
+├── chat-model/            # HuggingFace folder
+└── vision-model.bin       # PyTorch model
 ```
 
 Server runs at `http://localhost:8000`

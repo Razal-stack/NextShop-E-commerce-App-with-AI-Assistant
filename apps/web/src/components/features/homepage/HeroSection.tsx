@@ -9,6 +9,7 @@ import {
   Camera,
   ArrowRight,
   TrendingUp,
+  MessageCircle,
   ShoppingBag,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -33,14 +34,14 @@ const nexUsageSteps = [
   {
     title: "Ask Questions",
     description: "Type or speak your product queries",
-    icon: "💬",
+    icon: <MessageCircle className="h-5 w-5" />,
     image:
       "https://images.unsplash.com/photo-1573164713714-d95e436ab8d6?w=400&h=300&fit=crop",
   },
   {
     title: "Voice Search",
     description: "Use voice commands to find products",
-    icon: "🎤",
+    icon: <Mic className="w-5 h-5" />,
     image:
       "https://images.unsplash.com/photo-1589254065878-42c9da997008?w=400&h=300&fit=crop",
   },

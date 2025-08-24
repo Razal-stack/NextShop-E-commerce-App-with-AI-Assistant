@@ -14,8 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { useUIStore, useCartStore, useWishlistStore } from "@/lib/store";
-import { useAuth } from "@/hooks/useAuth";
+import { useUIStore, useCartStore, useWishlistStore, useUserStore } from "@/lib/store";
 import { useRouter, usePathname } from "next/navigation";
 
 export default function Header() {
@@ -23,23 +22,28 @@ export default function Header() {
     useUIStore();
   const { items: cartItems } = useCartStore();
   const { items: wishlistItems } = useWishlistStore();
-  const { user, isAuthenticated, logout, deleteAccount, isInitialized, isLoading } = useAuth();
+  
+  // SINGLE SOURCE OF TRUTH for authentication - UserStore only
+  const { session: user, isAuthenticated: isAuthenticatedFn, clearSession } = useUserStore();
+  const isAuthenticated = isAuthenticatedFn();
+  
   const router = useRouter();
   const pathname = usePathname();
 
   // Don't show auth buttons on auth pages
   const isAuthPage = pathname?.startsWith('/auth/');
 
-  // Backup check for authentication state using localStorage
-  const [hasTokenInStorage, setHasTokenInStorage] = React.useState(false);
+  // State update listener for auth changes
+  const [authStateCounter, setAuthStateCounter] = React.useState(0);
   
   React.useEffect(() => {
-    const token = localStorage.getItem('nextshop_token');
-    setHasTokenInStorage(!!token);
-  }, [isAuthenticated, user]);
-
-  // Final authentication check - use multiple sources
-  const finalIsAuthenticated = isAuthenticated || (hasTokenInStorage && user);
+    const handleAuthStateChange = () => {
+      setAuthStateCounter(prev => prev + 1);
+    };
+    
+    window.addEventListener('auth-state-changed', handleAuthStateChange);
+    return () => window.removeEventListener('auth-state-changed', handleAuthStateChange);
+  }, []);
 
   const totalItems = cartItems.reduce(
     (sum: number, item: any) => sum + item.quantity,
@@ -47,15 +51,35 @@ export default function Header() {
   );
 
   const handleSignOut = () => {
-    logout();
+    // Clear user session from UserStore
+    clearSession();
+    
+    // Clear cart and wishlist stores
+    const { useCartStore, useWishlistStore } = require('@/lib/store');
+    useCartStore.getState().clearCart();
+    useWishlistStore.getState().clearWishlist();
+    
+    // Clear localStorage
+    localStorage.removeItem('nextshop_token');
+    localStorage.removeItem('nextshop_user');
+    
+    // Navigate to home
     router.push('/');
   };
 
   const handleDeleteAccount = async () => {
     if (confirm('Are you sure you want to delete your account? This action cannot be undone.')) {
-      const success = await deleteAccount();
-      if (success) {
-        router.push('/');
+      try {
+        if (!user?.userId) return;
+        
+        // Import UserService to delete account
+        const { UserService } = await import('@/services/userService');
+        await UserService.deleteUser(user.userId);
+        
+        // Clear all data like logout
+        handleSignOut();
+      } catch (error) {
+        console.error('Failed to delete account:', error);
       }
     }
   };
@@ -64,8 +88,9 @@ export default function Header() {
     if (!user) return 'U';
     
     // Try to get initials from name object first
-    if (user.name?.firstname && user.name?.lastname) {
-      return `${user.name.firstname[0]}${user.name.lastname[0]}`.toUpperCase();
+    const name = (user as any).name;
+    if (name?.firstname && name?.lastname) {
+      return `${name.firstname[0]}${name.lastname[0]}`.toUpperCase();
     }
     
     // Fallback to username
@@ -74,6 +99,19 @@ export default function Header() {
     }
     
     return 'U';
+  };
+
+  const getUserDisplayName = (user: any) => {
+    if (!user) return '';
+    const name = (user as any).name;
+    if (name?.firstname && name?.lastname) {
+      return `${name.firstname} ${name.lastname}`;
+    }
+    return user.username || '';
+  };
+
+  const getUserEmail = (user: any) => {
+    return (user as any).email || '';
   };
 
   return (
@@ -159,13 +197,8 @@ export default function Header() {
             {/* Authentication - only show on non-auth pages */}
             {!isAuthPage && (
               <>
-                {!isInitialized || isLoading ? (
-                  <div className="hidden sm:flex items-center space-x-2">
-                    <div className="w-16 h-8 bg-slate-200 rounded animate-pulse"></div>
-                    <div className="w-20 h-8 bg-slate-200 rounded animate-pulse"></div>
-                  </div>
-                ) : finalIsAuthenticated && user ? (
-                  // Debug: Authenticated user should show avatar dropdown
+                {isAuthenticated && user ? (
+                  // Authenticated user - show avatar dropdown
                   <div className="hidden sm:flex items-center space-x-2">
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
@@ -185,12 +218,10 @@ export default function Header() {
                         <DropdownMenuLabel className="font-normal">
                           <div className="flex flex-col space-y-1 px-3 py-3 bg-gradient-to-r from-blue-50 to-purple-50 rounded-md mx-1 mb-1">
                             <p className="text-sm font-semibold leading-none text-slate-900">
-                              {user.name?.firstname && user.name?.lastname 
-                                ? `${user.name.firstname} ${user.name.lastname}`
-                                : user.username}
+                              {getUserDisplayName(user)}
                             </p>
                             <p className="text-xs leading-none text-slate-600">
-                              {user.email}
+                              {getUserEmail(user)}
                             </p>
                           </div>
                         </DropdownMenuLabel>
@@ -213,7 +244,7 @@ export default function Header() {
                     </DropdownMenu>
                   </div>
                 ) : (
-                  // Debug: Not authenticated - should show sign in/register buttons
+                  // Not authenticated - show sign in/register buttons
                   <div className="hidden sm:flex items-center space-x-2">
                     <Button
                       variant="ghost"
@@ -233,8 +264,8 @@ export default function Header() {
                   </div>
                 )}
 
-                {/* Mobile user dropdown - only show when authenticated and initialized */}
-                {isInitialized && finalIsAuthenticated && user && (
+                {/* Mobile user dropdown - only show when authenticated */}
+                {isAuthenticated && user && (
                   <div className="sm:hidden">
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
@@ -254,12 +285,10 @@ export default function Header() {
                         <DropdownMenuLabel className="font-normal">
                           <div className="flex flex-col space-y-1 px-3 py-3 bg-gradient-to-r from-blue-50 to-purple-50 rounded-md mx-1 mb-1">
                             <p className="text-sm font-semibold leading-none text-slate-900">
-                              {user.name?.firstname && user.name?.lastname 
-                                ? `${user.name.firstname} ${user.name.lastname}`
-                                : user.username}
+                              {getUserDisplayName(user)}
                             </p>
                             <p className="text-xs leading-none text-slate-600">
-                              {user.email}
+                              {getUserEmail(user)}
                             </p>
                           </div>
                         </DropdownMenuLabel>

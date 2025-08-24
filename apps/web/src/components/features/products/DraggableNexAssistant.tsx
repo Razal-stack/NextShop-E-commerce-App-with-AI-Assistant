@@ -17,28 +17,38 @@ import {
   Search,
   RotateCcw,
   Plus,
-  ArrowUp
+  ArrowUp,
+  Check,
+  Star,
+  Zap,
+  Clock
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { nexAssistantConfig } from '@/config/nexAssistantConfig';
 import { 
   useCartStore, 
   useWishlistStore, 
   useUserStore,
-  useAuthStore
+  useUIStore
 } from '@/lib/store';
 import { Product } from '@/lib/types';
-import { createMcpClient } from '@/lib/mcpClient';
+import { createMcpClient } from '@/services/mcpService';
 import { AIAssistantUIHandler, ChatMessage } from '@/lib/aiAssistant/uiHandler';
 import { useRouter } from 'next/navigation';
 import { Input } from '@/components/ui/input';
+import { toast } from 'sonner';
 
 export default function DraggableNexAssistant() {
   const { addItem: addToCart } = useCartStore();
   const { addItem: addToWishlist } = useWishlistStore();
-  const { session, isAuthenticated } = useUserStore();
-  const { loginViaChat } = useAuthStore();
+  
+  // SINGLE SOURCE OF TRUTH for authentication - UserStore only
+  const { session: user, isAuthenticated: isAuthenticatedFn } = useUserStore();
+  const isAuthenticated = isAuthenticatedFn();
+  
+  const { setCartOpen, setWishlistOpen } = useUIStore();
   const router = useRouter();
   
   const [position, setPosition] = useState({ x: 0, y: 0 });
@@ -53,9 +63,27 @@ export default function DraggableNexAssistant() {
   const [displayedText, setDisplayedText] = useState('');
   const [showQuickSuggestions, setShowQuickSuggestions] = useState(true);
   const [typingDots, setTypingDots] = useState(0);
+  const [processingTime, setProcessingTime] = useState(0);
+  const [showLongProcessingWarning, setShowLongProcessingWarning] = useState(false);
   
   // Pagination state - track current page for each message with products
   const [messagePagination, setMessagePagination] = useState<Map<number, number>>(new Map());
+  
+  // Clean up pagination state when messages change
+  useEffect(() => {
+    setMessagePagination(prev => {
+      const newPagination = new Map(prev);
+      
+      // Remove pagination entries for messages that no longer exist or don't have products
+      for (const [messageIndex] of prev) {
+        if (messageIndex >= messages.length || !messages[messageIndex]?.products?.length) {
+          newPagination.delete(messageIndex);
+        }
+      }
+      
+      return newPagination;
+    });
+  }, [messages.length]); // Only run when the number of messages changes
   
   // Login state for inline authentication
   const [showLoginForm, setShowLoginForm] = useState(false);
@@ -72,17 +100,30 @@ export default function DraggableNexAssistant() {
       }
     },
     onProductAction: (action, product) => {
-      if (!session) {
+      if (!user) {
         // Let Nex handle the error message internally
         const errorMessage = uiHandler.createErrorMessage('Please log in to add items to your cart or wishlist.');
         setMessages(prev => [...prev, errorMessage]);
         return;
       }
-      
+
+      // Execute the action
       if (action === 'add_to_cart') {
         addToCart(product);
       } else if (action === 'add_to_wishlist') {
         addToWishlist(product);
+      }
+    },
+    onUIAction: (action, products) => {
+      // Handle UI-only actions like view cart, view wishlist, etc.
+      console.log('UI Action:', action, products);
+    },
+    onAuthAction: (action) => {
+      if (action === 'login') {
+        setShowLoginForm(true);
+      } else if (action === 'logout') {
+        // Handle logout
+        console.log('Logout requested');
       }
     },
     onError: (error) => {
@@ -92,22 +133,18 @@ export default function DraggableNexAssistant() {
     }
   });
   
-  const quickSearchSuggestions = [
-    { icon: Search, text: "Ask: 'Find electronics under £200'", category: "electronics" },
-    { icon: ShoppingCart, text: "Ask: 'Show me trending clothes'", category: "clothing" },  
-    { icon: Heart, text: "Ask: 'What are the best rated products?'", category: "popular" },
-    { icon: Search, text: "Try: 'Find gifts for birthdays'", category: "gifts" },
-    { icon: ShoppingCart, text: "Ask: 'Compare similar products for me'", category: "compare" },
-    { icon: Heart, text: "Try: 'Show me 5-star electronics'", category: "ratings" }
-  ];
+  // Use configuration-based suggestions
+  const quickSearchSuggestions = nexAssistantConfig.quickSuggestions;
 
-  // Simplified placeholder queries for debugging
-  const placeholderQueries = [
-    "Hello! How can I help you?",
-    "Find products under £200",
-    "What are you looking for?",
-    "Ask me anything!",
-  ];
+  // Use configuration-based placeholder queries
+  const placeholderQueries = nexAssistantConfig.placeholderQueries;
+  
+  // Helper function to get current loading state
+  const getCurrentLoadingState = (time: number) => {
+    return nexAssistantConfig.loadingStates.find(state => 
+      time >= state.timeRange.min && time < state.timeRange.max
+    ) || nexAssistantConfig.loadingStates[nexAssistantConfig.loadingStates.length - 1];
+  };
   
   const mcpClient = createMcpClient();
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -132,6 +169,36 @@ export default function DraggableNexAssistant() {
       }, 500);
       return () => clearInterval(interval);
     }
+  }, [isTyping]);
+
+  // Processing time tracker and long processing warning
+  useEffect(() => {
+    let processingInterval: NodeJS.Timeout;
+    let warningTimeout: NodeJS.Timeout;
+    
+    if (isTyping) {
+      setProcessingTime(0);
+      setShowLongProcessingWarning(false);
+      
+      // Update processing time every second
+      processingInterval = setInterval(() => {
+        setProcessingTime(prev => prev + 1);
+      }, 1000);
+      
+      // Show warning after 30 seconds
+      warningTimeout = setTimeout(() => {
+        setShowLongProcessingWarning(true);
+      }, 30000);
+    }
+    
+    return () => {
+      if (processingInterval) clearInterval(processingInterval);
+      if (warningTimeout) clearTimeout(warningTimeout);
+      if (!isTyping) {
+        setProcessingTime(0);
+        setShowLongProcessingWarning(false);
+      }
+    };
   }, [isTyping]);
 
   // Simplified typewriter animation
@@ -220,24 +287,50 @@ export default function DraggableNexAssistant() {
     setDisplayedText('');
   };
 
-  const handleAddToCart = (product: Product) => {
-    if (!isAuthenticated()) {
-      // Show login prompt in chat instead of just an error
+  const handleAddToCart = async (product: Product) => {
+    if (!isAuthenticated) {
+      // Set pending action and show authentication prompt in chat
       setPendingAction({ type: 'cart', product });
-      showAuthenticationPrompt('add to cart');
+      showAuthenticationPrompt('add items to your cart');
       return;
     }
-    uiHandler.handleProductAction('add_to_cart', product);
+    
+    // User is authenticated - add to cart directly through UI store
+    const success = await addToCart(product);
+    if (success) {
+      const successMessage: ChatMessage = {
+        id: `cart-success-${Date.now()}`,
+        text: `Awesome! I've added "${product.title}" to your cart. Ready to checkout?`,
+        sender: 'nex',
+        timestamp: new Date(),
+        showCartButton: true
+      };
+      setMessages(prev => [...prev, successMessage]);
+      toast.success('Added to cart!');
+    }
   };
 
-  const handleAddToWishlist = (product: Product) => {
-    if (!isAuthenticated()) {
-      // Show login prompt in chat instead of just an error
+  const handleAddToWishlist = async (product: Product) => {
+    if (!isAuthenticated) {
+      // Set pending action and show authentication prompt in chat
       setPendingAction({ type: 'wishlist', product });
-      showAuthenticationPrompt('add to wishlist');
+      showAuthenticationPrompt('add items to your wishlist');
       return;
     }
-    uiHandler.handleProductAction('add_to_wishlist', product);
+    
+    // User is authenticated - add to wishlist directly through UI store
+    const success = await addToWishlist(product);
+    if (success) {
+      const successMessage: ChatMessage = {
+        id: `wishlist-success-${Date.now()}`,
+        text: `Perfect! I've saved "${product.title}" to your wishlist for later.`,
+        sender: 'nex',
+        timestamp: new Date(),
+        showWishlistButton: true
+      };
+      setMessages(prev => [...prev, successMessage]);
+      toast.success('Added to wishlist!');
+    }
   };
 
   // Show authentication prompt in chat
@@ -266,30 +359,131 @@ export default function DraggableNexAssistant() {
     }
 
     setIsLoggingIn(true);
-    const success = await loginViaChat(loginCredentials.username, loginCredentials.password);
     
-    if (success) {
-      const successMessage: ChatMessage = {
-        id: `success-${Date.now()}`,
-        text: `Welcome back, ${loginCredentials.username}!`,
-        sender: 'nex',
-        timestamp: new Date()
-      };
-      setMessages(prev => [...prev, successMessage]);
+    try {
+      // Import UserService to login via chat
+      const { UserService } = await import('@/services/userService');
+      const result = await UserService.login({
+        username: loginCredentials.username,
+        password: loginCredentials.password
+      });
       
-      // Execute pending action
-      if (pendingAction) {
-        if (pendingAction.type === 'cart') {
-          addToCart(pendingAction.product);
-        } else {
-          addToWishlist(pendingAction.product);
+      if (result && result.token) {
+        // Decode JWT token to get user ID
+        let realUserId: number;
+        try {
+          const tokenPayload = JSON.parse(atob(result.token.split('.')[1]));
+          realUserId = tokenPayload.sub || result.userId;
+        } catch {
+          realUserId = result.userId;
         }
-        setPendingAction(null);
+
+        // Get full user data
+        const userData = await UserService.getUser(realUserId);
+        
+        // Update UserStore with the authenticated session
+        const { useUserStore } = await import('@/lib/store');
+        useUserStore.getState().setSession({
+          token: result.token,
+          userId: realUserId,
+          isAuthenticated: true,
+          ...userData
+        });
+        
+        // **CRITICAL**: Load user's cart data from backend and sync with local cart
+        try {
+          const { CartService } = await import('@/services/cartService');
+          const { ProductService } = await import('@/services/productService');
+          const userCart = await CartService.getUserCart(realUserId);
+          
+          // Check if user has cart data on backend
+          if (userCart && userCart.products && userCart.products.length > 0) {
+            // Fetch full product details for each cart item
+            const cartItemsPromises = userCart.products.map(async (item: any) => {
+              try {
+                const product = await ProductService.getProduct(item.productId);
+                return {
+                  id: product.id,
+                  title: product.title,
+                  price: product.price,
+                  image: product.image,
+                  quantity: item.quantity
+                };
+              } catch (error) {
+                console.error(`Failed to fetch product ${item.productId}:`, error);
+                return null;
+              }
+            });
+            
+            const cartItems = await Promise.all(cartItemsPromises);
+            const validCartItems = cartItems.filter(item => item !== null);
+            
+            if (validCartItems.length > 0) {
+              // Load cart data into the store
+              const { useCartStore } = await import('@/lib/store');
+              useCartStore.getState().loadCartFromData(validCartItems, userCart.id);
+              
+              // Show cart loaded message
+              const cartLoadedMessage: ChatMessage = {
+                id: `cart-loaded-${Date.now()}`,
+                text: `I've restored ${validCartItems.length} item${validCartItems.length !== 1 ? 's' : ''} from your previous shopping session!`,
+                sender: 'nex',
+                timestamp: new Date()
+              };
+              setMessages(prev => [...prev, cartLoadedMessage]);
+            }
+          }
+        } catch (error) {
+          console.error('Failed to load user cart:', error);
+          // Don't fail login if cart loading fails
+        }
+        
+        const successMessage: ChatMessage = {
+          id: `success-${Date.now()}`,
+          text: `Welcome back, ${userData.name?.firstname || userData.username}!`,
+          sender: 'nex',
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, successMessage]);
+        
+        // Execute pending action
+        if (pendingAction) {
+          if (pendingAction.type === 'cart') {
+            const cartSuccess = await addToCart(pendingAction.product);
+            if (cartSuccess) {
+              const cartMessage: ChatMessage = {
+                id: `cart-post-login-${Date.now()}`,
+                text: `Great! I've added "${pendingAction.product.title}" to your cart.`,
+                sender: 'nex',
+                timestamp: new Date(),
+                showCartButton: true
+              };
+              setMessages(prev => [...prev, cartMessage]);
+              toast.success('Added to cart!');
+            }
+          } else if (pendingAction.type === 'wishlist') {
+            const wishlistSuccess = await addToWishlist(pendingAction.product);
+            if (wishlistSuccess) {
+              const wishlistMessage: ChatMessage = {
+                id: `wishlist-post-login-${Date.now()}`,
+                text: `Perfect! I've saved "${pendingAction.product.title}" to your wishlist.`,
+                sender: 'nex',
+                timestamp: new Date(),
+                showWishlistButton: true
+              };
+              setMessages(prev => [...prev, wishlistMessage]);
+              toast.success('Added to wishlist!');
+            }
+          }
+          setPendingAction(null);
+        }
+        
+        setShowLoginForm(false);
+        setLoginCredentials({ username: '', password: '' });
+      } else {
+        throw new Error('Invalid credentials');
       }
-      
-      setShowLoginForm(false);
-      setLoginCredentials({ username: '', password: '' });
-    } else {
+    } catch (error) {
       const errorMessage: ChatMessage = {
         id: `error-${Date.now()}`,
         text: 'Login failed. Please check your credentials and try again.',
@@ -373,17 +567,40 @@ export default function DraggableNexAssistant() {
       const conversationHistory = uiHandler.buildConversationHistory(messages);
       conversationHistory.push({ role: 'user', content: messageText });
 
-      // Send message to backend
-      const response = await mcpClient.sendMessage(conversationHistory);
+      // Send message to backend with progress tracking
+      const response = await mcpClient.sendMessage(
+        conversationHistory, 
+        undefined,
+        (progressInfo) => {
+          // Progress is automatically handled by our useEffect hooks above
+          console.log(`[AI Progress] ${progressInfo.stage}: ${progressInfo.message} (${Math.round(progressInfo.timeElapsed/1000)}s)`);
+        }
+      );
       
       // Process response using UI handler
       const assistantMessage = uiHandler.processResponse(response, messageText);
-      setMessages(prev => [...prev, assistantMessage]);
+      setMessages(prev => {
+        const newMessages = [...prev, assistantMessage];
+        
+        // Reset pagination to page 1 for new product search results
+        if (assistantMessage.products && assistantMessage.products.length > 0) {
+          const messageIndex = newMessages.length - 1;
+          setMessagePagination(paginationPrev => {
+            const newPagination = new Map(paginationPrev);
+            newPagination.set(messageIndex, 1); // Always start at page 1 for new queries
+            return newPagination;
+          });
+        }
+        
+        return newMessages;
+      });
 
     } catch (error) {
       console.error('Chat error:', error);
+      
+      // Error handling is now done by the HTTP service with user-friendly messages
       const errorMessage = uiHandler.createErrorMessage(
-        'I encountered an issue processing your request. Let me try a different approach or please rephrase your question.'
+        error instanceof Error ? error.message : 'I encountered an issue processing your request. Let me try a different approach or please rephrase your question.'
       );
       setMessages(prev => [...prev, errorMessage]);
     } finally {
@@ -396,6 +613,116 @@ export default function DraggableNexAssistant() {
   const handleQuickSuggestion = (suggestion: typeof quickSearchSuggestions[0]) => {
     const processedText = uiHandler.processQuickSuggestion(suggestion.text);
     handleSendMessage(processedText);
+  };
+
+  // Generic function to handle post-action UI (drawer + toast)
+  const handlePostActionUI = (actionType: 'cart' | 'wishlist', productCount: number) => {
+    if (actionType === 'cart') {
+      setCartOpen(true);
+      toast.success(`Added ${productCount} item${productCount !== 1 ? 's' : ''} to cart!`, {
+        duration: 2000
+      });
+    } else {
+      setWishlistOpen(true);
+      toast.success(`Added ${productCount} item${productCount !== 1 ? 's' : ''} to wishlist!`, {
+        duration: 2000
+      });
+    }
+  };
+
+  // Handle confirmation actions (Proceed/Cancel buttons)
+  const handleConfirmAction = (messageId: string, confirmed: boolean) => {
+    const message = messages.find(m => m.id === messageId);
+    if (!message || !message.pendingAction) return;
+
+    if (confirmed) {
+      // Add user's action message with better text
+      const userActionMessage = uiHandler.createUserMessage('Okay, proceed!');
+      setMessages(prev => [...prev, userActionMessage]);
+
+      // **CRITICAL FIX**: Check authentication before proceeding
+      if (!isAuthenticated) {
+        // User is not authenticated - show login prompt
+        const authMessage: ChatMessage = {
+          id: `auth-required-${Date.now()}`,
+          text: 'Sorry, Please log in to add items to your cart or wishlist.',
+          sender: 'nex',
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, authMessage]);
+        
+        // Set pending action for after login and show login form
+        if (message.products && message.products.length > 0) {
+          const actionType = message.pendingAction?.type;
+          setPendingAction({ 
+            type: actionType?.includes('cart') ? 'cart' : 'wishlist', 
+            product: message.products[0] // Take first product for now
+          });
+        }
+        setShowLoginForm(true);
+        return;
+      }
+
+      // User is authenticated - execute the confirmed action with products from the same message
+      uiHandler.executeConfirmedAction(message.pendingAction, message.products);
+      
+      // Get action details for UI handling
+      const actionType = message.pendingAction?.type;
+      const productCount = message.products?.length || 0;
+      
+      // Handle UI (drawer + toast)
+      if (actionType === 'cart.add') {
+        handlePostActionUI('cart', productCount);
+      } else if (actionType === 'wishlist.add') {
+        handlePostActionUI('wishlist', productCount);
+      }
+      
+      // Add enthusiastic Nex success message with view button (immediate)
+      let successText = '';
+      let showCartButton = false;
+      let showWishlistButton = false;
+
+      if (actionType === 'cart.add') {
+        successText = productCount === 1 
+          ? `Awesome! I've added it to your cart. Ready to checkout?` 
+          : `Great! I've added all ${productCount} items to your cart. You're all set!`;
+        showCartButton = true;
+      } else if (actionType === 'wishlist.add') {
+        successText = productCount === 1
+          ? `Perfect! I've saved it to your wishlist for later.`
+          : `Fantastic! I've added all ${productCount} items to your wishlist. Great choices!`;
+        showWishlistButton = true;
+      } else {
+        successText = 'Done! Everything looks good.';
+      }
+
+      const successMessage: ChatMessage = {
+        id: crypto.randomUUID(),
+        text: successText,
+        sender: 'nex',
+        timestamp: new Date(),
+        showCartButton: showCartButton,
+        showWishlistButton: showWishlistButton
+      };
+      setMessages(prev => [...prev, successMessage]);
+    } else {
+      // Add user's cancellation message with better text
+      const userCancelMessage = uiHandler.createUserMessage('No, cancel that');
+      setMessages(prev => [...prev, userCancelMessage]);
+      
+      // Add friendly Nex cancellation acknowledgment (immediate)
+      const nexCancelMessage = uiHandler.createMessage('No worries at all! Let me know if you\'d like to explore other options.', 'nex');
+      setMessages(prev => [...prev, nexCancelMessage]);
+    }
+
+    // Update the message to remove the confirmation state
+    setMessages(prev => 
+      prev.map(m => 
+        m.id === messageId 
+          ? { ...m, awaitingConfirmation: false, pendingAction: undefined }
+          : m
+      )
+    );
   };
 
   if (!isExpanded) {
@@ -503,9 +830,9 @@ export default function DraggableNexAssistant() {
                   <>
                     {/* Clean Welcome Section */}
                     <div className="mb-6">
-                      <h4 className="text-lg font-semibold mb-3" style={{ color: 'var(--brand-800)' }}>Welcome! I'm Nex, Your Shopping Assistant</h4>
+                      <h4 className="text-lg font-semibold mb-3" style={{ color: 'var(--brand-800)' }}>{nexAssistantConfig.welcomeTitle}</h4>
                       <p className="text-slate-600 leading-relaxed">
-                        I'll help you find the perfect products within your budget and specifications. Let's discover something amazing together!
+                        {nexAssistantConfig.welcomeDescription}
                       </p>
                     </div>
 
@@ -514,7 +841,7 @@ export default function DraggableNexAssistant() {
                       <div className="mb-6">
                         <h5 className="text-sm font-semibold text-slate-700 mb-3 flex items-center">
                           <span className="w-1.5 h-1.5 rounded-full mr-3" style={{ backgroundColor: 'var(--brand-500)' }}></span>
-                          Quick searches to get you started
+                          {nexAssistantConfig.quickSuggestionsTitle}
                         </h5>
                         <div className="grid grid-cols-1 gap-2">
                           {quickSearchSuggestions.map((suggestion, index) => (
@@ -561,7 +888,7 @@ export default function DraggableNexAssistant() {
                           <p className="text-sm whitespace-pre-wrap">{message.text}</p>
                           
                           {/* Inline Login Form */}
-                          {showLoginForm && message.text.includes('You\'re not signed in!') && message.sender === 'nex' && (
+                          {showLoginForm && (message.text.includes('You\'re not signed in!') || message.text.includes('Please log in to add items')) && message.sender === 'nex' && (
                             <div className="mt-4 p-4 bg-white rounded-lg border border-gray-200 shadow-sm">
                               <div className="space-y-3">
                                 <div className="text-center">
@@ -618,6 +945,34 @@ export default function DraggableNexAssistant() {
                             </div>
                           )}
                           
+                          {/* View Cart Button */}
+                          {message.showCartButton && message.sender === 'nex' && (
+                            <div className="mt-4 flex justify-center">
+                              <Button
+                                size="sm"
+                                className="btn-primary h-8 px-4 text-xs font-medium"
+                                onClick={() => setCartOpen(true)}
+                              >
+                                <ShoppingCart className="w-3 h-3 mr-1" />
+                                View Cart
+                              </Button>
+                            </div>
+                          )}
+                          
+                          {/* View Wishlist Button */}
+                          {message.showWishlistButton && message.sender === 'nex' && (
+                            <div className="mt-4 flex justify-center">
+                              <Button
+                                size="sm"
+                                className="btn-secondary h-8 px-4 text-xs font-medium"
+                                onClick={() => setWishlistOpen(true)}
+                              >
+                                <Heart className="w-3 h-3 mr-1" />
+                                View Wishlist
+                              </Button>
+                            </div>
+                          )}
+                          
                           {/* Product Cards with Pagination */}
                           {message.products && message.products.length > 0 && (() => {
                             const messageIndex = index;
@@ -655,7 +1010,7 @@ export default function DraggableNexAssistant() {
                                             </p>
                                             {product.rating && (
                                               <div className="flex items-center text-xs">
-                                                <span className="text-yellow-500">⭐</span>
+                                                <Star className="w-3 h-3 text-yellow-500 fill-yellow-500" />
                                                 <span className="text-gray-600 ml-1 font-medium">{product.rating.rate}</span>
                                               </div>
                                             )}
@@ -704,7 +1059,7 @@ export default function DraggableNexAssistant() {
                                     <div className="flex gap-2 justify-center">
                                       <Button
                                         size="sm"
-                                        className={`h-7 px-3 text-xs ${currentPage <= 1 ? 'btn-ghost' : 'btn-secondary'}`}
+                                        className={`btn-secondary h-7 px-3 text-xs ${currentPage <= 1 ? 'opacity-50 cursor-not-allowed' : ''}`}
                                         disabled={currentPage <= 1}
                                         onClick={() => handlePreviousPage(messageIndex)}
                                       >
@@ -713,7 +1068,7 @@ export default function DraggableNexAssistant() {
                                       </Button>
                                       <Button
                                         size="sm"
-                                        className={`h-7 px-3 text-xs ${currentPage >= totalPages ? 'btn-ghost' : 'btn-secondary'}`}
+                                        className={`btn-secondary h-7 px-3 text-xs ${currentPage >= totalPages ? 'opacity-50 cursor-not-allowed' : ''}`}
                                         disabled={currentPage >= totalPages}
                                         onClick={() => handleNextPage(messageIndex)}
                                       >
@@ -726,6 +1081,35 @@ export default function DraggableNexAssistant() {
                               </div>
                             );
                           })()}
+                          
+                          {/* Confirmation Buttons for UI Actions - Show AFTER products */}
+                          {message.awaitingConfirmation && message.pendingAction && message.sender === 'nex' && (
+                            <div className="mt-4 p-4 bg-amber-50 rounded-lg border border-amber-200">
+                              <div className="text-center">
+                                <p className="text-sm text-amber-800 mb-3 font-medium">
+                                  Would you like me to add the above listed product(s) to your {message.pendingAction.type?.includes('cart') ? 'cart' : 'wishlist'}?
+                                </p>
+                                <div className="flex gap-2 justify-center">
+                                  <Button
+                                    size="sm"
+                                    className="btn-success h-8 px-4 text-xs font-medium"
+                                    onClick={() => handleConfirmAction(message.id, true)}
+                                  >
+                                    <Check className="w-3 h-3 mr-1" />
+                                    Proceed
+                                  </Button>
+                                  <Button
+                                    size="sm" 
+                                    className="btn-secondary h-8 px-4 text-xs"
+                                    onClick={() => handleConfirmAction(message.id, false)}
+                                  >
+                                    <X className="w-3 h-3 mr-1" />
+                                    Cancel
+                                  </Button>
+                                </div>
+                              </div>
+                            </div>
+                          )}
                           
                           <span className="text-xs opacity-70 mt-1 block">
                             {message.timestamp.toLocaleTimeString([], {
@@ -743,40 +1127,102 @@ export default function DraggableNexAssistant() {
                         animate={{ opacity: 1, y: 0 }}
                         className="flex justify-start"
                       >
-                        <div className="bg-slate-100 text-slate-900 p-4 rounded-lg max-w-[80%] border" style={{ background: 'linear-gradient(135deg, var(--brand-50), white)' }}>
+                        <div className="bg-slate-100 text-slate-900 p-4 rounded-lg max-w-[80%] shadow-md" style={{ background: 'linear-gradient(135deg, var(--brand-100), var(--brand-50))' }}>
                           <div className="flex items-center space-x-3">
                             <motion.div
-                              className="w-6 h-6 rounded-full flex items-center justify-center"
+                              className="w-8 h-8 rounded-full flex items-center justify-center"
                               style={{ background: 'var(--brand-gradient)' }}
                               animate={{ rotate: 360 }}
                               transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
                             >
-                              <Sparkles className="w-3 h-3 text-white" />
+                              <Sparkles className="w-4 h-4 text-white" />
                             </motion.div>
                             <div className="flex-1">
-                              <p className="text-sm font-medium mb-2" style={{ color: 'var(--brand-700)' }}>
-                                Nex is thinking{'.'.repeat(typingDots + 1)}
-                              </p>
-                              <div className="flex items-center space-x-1">
-                                <motion.div
-                                  animate={{ scale: [1, 1.4, 1], opacity: [0.5, 1, 0.5] }}
-                                  transition={{ duration: 0.6, repeat: Infinity, delay: 0 }}
-                                  className="w-2 h-2 rounded-full"
-                                  style={{ backgroundColor: 'var(--brand-400)' }}
-                                />
-                                <motion.div
-                                  animate={{ scale: [1, 1.4, 1], opacity: [0.5, 1, 0.5] }}
-                                  transition={{ duration: 0.6, repeat: Infinity, delay: 0.2 }}
-                                  className="w-2 h-2 rounded-full"
-                                  style={{ backgroundColor: 'var(--brand-400)' }}
-                                />
-                                <motion.div
-                                  animate={{ scale: [1, 1.4, 1], opacity: [0.5, 1, 0.5] }}
-                                  transition={{ duration: 0.6, repeat: Infinity, delay: 0.4 }}
-                                  className="w-2 h-2 rounded-full"
-                                  style={{ backgroundColor: 'var(--brand-400)' }}
-                                />
-                                <span className="text-xs text-slate-500 ml-2">Searching products</span>
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="flex items-center space-x-2">
+                                  <p className="text-sm font-medium" style={{ color: 'var(--brand-700)' }}>
+                                    Nex is analyzing
+                                  </p>
+                                  <div className="flex space-x-1">
+                                    <motion.div
+                                      animate={{ opacity: [0.3, 1, 0.3] }}
+                                      transition={{ duration: 0.8, repeat: Infinity, delay: 0 }}
+                                      className="w-1 h-1 rounded-full"
+                                      style={{ backgroundColor: 'var(--brand-500)' }}
+                                    />
+                                    <motion.div
+                                      animate={{ opacity: [0.3, 1, 0.3] }}
+                                      transition={{ duration: 0.8, repeat: Infinity, delay: 0.2 }}
+                                      className="w-1 h-1 rounded-full"
+                                      style={{ backgroundColor: 'var(--brand-500)' }}
+                                    />
+                                    <motion.div
+                                      animate={{ opacity: [0.3, 1, 0.3] }}
+                                      transition={{ duration: 0.8, repeat: Infinity, delay: 0.4 }}
+                                      className="w-1 h-1 rounded-full"
+                                      style={{ backgroundColor: 'var(--brand-500)' }}
+                                    />
+                                  </div>
+                                </div>
+                                <div className="flex items-center space-x-1">
+                                  <Clock className="w-3 h-3 text-slate-400" />
+                                  <span className="text-xs text-slate-500 font-mono">
+                                    {Math.floor(processingTime / 60)}:{String(processingTime % 60).padStart(2, '0')}
+                                  </span>
+                                </div>
+                              </div>
+                              
+                              {showLongProcessingWarning && (
+                                <div className="mb-3 p-3 rounded-lg border-0" style={{ 
+                                  backgroundColor: 'var(--brand-25)',
+                                  border: '1px solid var(--brand-200)'
+                                }}>
+                                  <div className="flex items-center space-x-2 mb-2">
+                                    <div className="w-4 h-4 rounded-full flex items-center justify-center" style={{ background: 'var(--brand-gradient)' }}>
+                                      <Sparkles className="w-3 h-3 text-white" />
+                                    </div>
+                                    <p className="text-xs font-medium" style={{ color: 'var(--brand-700)' }}>
+                                      {nexAssistantConfig.loadingMessages.longProcessingTitle}
+                                    </p>
+                                  </div>
+                                  <p className="text-xs text-slate-600 leading-relaxed">
+                                    {nexAssistantConfig.loadingMessages.longProcessingMessage}
+                                  </p>
+                                </div>
+                              )}
+                              
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center space-x-3">
+                                  <motion.div
+                                    animate={{ scale: [1, 1.2, 1], opacity: [0.4, 1, 0.4] }}
+                                    transition={{ duration: 1, repeat: Infinity, delay: 0 }}
+                                    className="w-2 h-2 rounded-full"
+                                    style={{ backgroundColor: 'var(--brand-400)' }}
+                                  />
+                                  <motion.div
+                                    animate={{ scale: [1, 1.2, 1], opacity: [0.4, 1, 0.4] }}
+                                    transition={{ duration: 1, repeat: Infinity, delay: 0.3 }}
+                                    className="w-2 h-2 rounded-full"
+                                    style={{ backgroundColor: 'var(--brand-400)' }}
+                                  />
+                                  <motion.div
+                                    animate={{ scale: [1, 1.2, 1], opacity: [0.4, 1, 0.4] }}
+                                    transition={{ duration: 1, repeat: Infinity, delay: 0.6 }}
+                                    className="w-2 h-2 rounded-full"
+                                    style={{ backgroundColor: 'var(--brand-400)' }}
+                                  />
+                                  <span className="text-xs font-medium text-slate-600">
+                                    {getCurrentLoadingState(processingTime).message}
+                                  </span>
+                                </div>
+                                {processingTime < 60 && (
+                                  <div className="flex items-center space-x-1">
+                                    <Zap className="w-3 h-3 text-slate-400" />
+                                    <span className="text-xs text-slate-500">
+                                      {nexAssistantConfig.loadingMessages.maxTimeMessage}
+                                    </span>
+                                  </div>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -801,7 +1247,7 @@ export default function DraggableNexAssistant() {
                           className="h-8 w-8 p-0 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors duration-200"
                           onClick={() => {
                             // Future voice functionality
-                            const voiceMessage = uiHandler.createErrorMessage("🎤 Voice input is coming soon! For now, you can type your questions.");
+                            const voiceMessage = uiHandler.createErrorMessage("Voice input is coming soon! For now, you can type your questions.");
                             setMessages(prev => [...prev, voiceMessage]);
                           }}
                         >
@@ -927,17 +1373,6 @@ export default function DraggableNexAssistant() {
                       </span>
                     </div>
                     
-                    {isTyping && (
-                      <motion.span
-                        animate={{ opacity: [0.5, 1, 0.5] }}
-                        transition={{ duration: 1.5, repeat: Infinity }}
-                        className="flex items-center text-slate-600"
-                        style={{ color: 'var(--brand-600)' }}
-                      >
-                        <div className="w-3 h-3 rounded-full mr-2 animate-pulse" style={{ backgroundColor: 'var(--brand-400)' }}></div>
-                        Nex is thinking...
-                      </motion.span>
-                    )}
                   </div>
                 </div>
               </div>

@@ -117,26 +117,11 @@ export class ResponsePreprocessor {
   }
 
   /**
-   * Format message for display with emojis and styling
+   * Format message for display with better context
    */
   static formatMessageForDisplay(message: string): string {
-    // Add emojis based on content
-    if (message.includes('found') && message.includes('products')) {
-      return `🎉 ${message}`;
-    }
-    if (message.includes('cart')) {
-      return `🛒 ${message}`;
-    }
-    if (message.includes('wishlist')) {
-      return `❤️ ${message}`;
-    }
-    if (message.includes('error') || message.includes('sorry')) {
-      return `😅 ${message}`;
-    }
-    if (message.includes('help') || message.includes('assist')) {
-      return `🤝 ${message}`;
-    }
-    
+    // Return message as-is for cleaner presentation
+    // Remove emoji prefixes for professional look
     return message;
   }
 }

@@ -22,5 +22,5 @@ router.get('/category/:category',
 // GET /api/products/:id - Get single product by ID (MUST come after /categories)
 router.get('/:id', validateParams(ProductIdSchema), productController.getProductById);
 
-const productRoutes = router;
+const productRoutes: Router = router;
 export default productRoutes;

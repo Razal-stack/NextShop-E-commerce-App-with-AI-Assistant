@@ -64,8 +64,9 @@ export function ChatHistorySidebar({
   };
 
   const getSessionIcon = (title: string) => {
-    if (title.includes('🔍')) return Search;
-    if (title.includes('🛍️')) return ShoppingBag;
+    if (title.includes('Search:')) return Search;
+    if (title.includes('Search:')) return Search;
+    if (title.toLowerCase().includes('product') || title.toLowerCase().includes('buy')) return ShoppingBag;
     if (title.includes('❓')) return HelpCircle;
     return MessageCircle;
   };
@@ -132,7 +133,7 @@ export function ChatHistorySidebar({
                     </div>
                     <div className="flex-1 text-left min-w-0">
                       <p className="text-sm font-medium text-gray-900 line-clamp-2">
-                        {session.title.replace(/^[🔍🛍️❓💬]\s*/, '')}
+                        {session.title.replace(/^(Search:|Product Search)\s*/, '')}
                       </p>
                       <div className="flex items-center space-x-2 mt-1">
                         <p className="text-xs text-gray-500">

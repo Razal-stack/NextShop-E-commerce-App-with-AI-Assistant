@@ -1,13 +1,13 @@
-import express from 'express';
+import express, { Express } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import axios from 'axios';
-import { createMCPServer } from './mcp/server';
-import apiRoutes from './routes/indexNew'; // ✅ Using new LangChain orchestration routes
+import { createMCPServer } from './mcp/mcpServer';
+import apiRoutes from './routes/index'; // Using LangChain orchestration routes
 
 dotenv.config();
 
-const app = express();
+const app: Express = express();
 const PORT = process.env.PORT || 3001;
 
 // Middleware
@@ -122,6 +122,7 @@ app.listen(PORT, () => {
   console.log(`  GET  /api/products/categories`);
   console.log(`  GET  /api/products/:id`);
   console.log(`  GET  /api/products/category/:category`);
+  console.log(`  GET  /api/categories`);
   console.log(`  GET  /api/carts`);
   console.log(`  GET  /api/carts/:id`);
   console.log(`  GET  /api/carts/user/:userId`);
@@ -134,6 +135,7 @@ app.listen(PORT, () => {
   console.log(`  PUT  /api/users/:id`);
   console.log(`  DELETE /api/users/:id`);
   console.log(`  POST /api/auth/login`);
+  console.log(`  POST /api/ai/query`);
 });
 
 export default app;

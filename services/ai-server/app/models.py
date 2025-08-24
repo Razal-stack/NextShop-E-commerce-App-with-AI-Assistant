@@ -7,23 +7,30 @@ import logging
 import time
 import torch
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Union
 from PIL import Image
 import io
 import base64
 
 logger = logging.getLogger(__name__)
 
+# Type hint for LLAMA model (avoiding import issues)
+try:
+    from llama_cpp import Llama
+    LlamaModel = Llama
+except ImportError:
+    LlamaModel = Any
+
 
 class AIModelManager:
     """Manages AI models for reasoning tasks - auto-detects local models"""
     
     def __init__(self):
-        self.text_model = None
-        self.text_pipeline = None
-        self.vision_model = None
+        self.text_model: Optional[Any] = None  # Will be LlamaModel when loaded
+        self.text_pipeline: Optional[Any] = None  # HuggingFace pipeline
+        self.vision_model: Optional[Any] = None
         self.device = self._get_device()
-        self.loaded_models = []
+        self.loaded_models: List[str] = []
         self.models_dir = Path("models")
         self.available_models = self._scan_available_models()
         
@@ -178,7 +185,7 @@ class AIModelManager:
             # Load the model with optimized settings for faster inference
             self.text_model = Llama(
                 model_path=model_path,
-                n_ctx=512,         # Much smaller context window for faster processing
+                n_ctx=4096,        # Increased context window for better understanding  
                 n_gpu_layers=n_gpu_layers,
                 verbose=False,
                 n_threads=2,       # Fewer threads to avoid contention
@@ -216,7 +223,7 @@ class AIModelManager:
     async def _initialize_mock_model(self):
         """Initialize a mock model for testing when no real models are available"""
         logger.info("Initializing mock text model for testing")
-        self.text_model = "mock_model"
+        self.text_model = None  # Set to None so we use mock generation path
         self.loaded_models.append("text:mock_reasoning_model")
     
     async def initialize_vision_model(self):
@@ -224,7 +231,7 @@ class AIModelManager:
         vision_model = self._get_best_vision_model()
         if vision_model:
             logger.info(f"Vision model found: {vision_model['name']}")
-            self.vision_model = "mock_vision_model"  # Placeholder
+            self.vision_model = "mock_vision_placeholder"  # Placeholder for now
             self.loaded_models.append(f"vision:{vision_model['name']}")
         else:
             logger.info("No vision models found, vision capabilities disabled")
@@ -255,15 +262,20 @@ class AIModelManager:
                     max_tokens=max_tokens,
                     temperature=temperature,
                     echo=False,  # Don't include prompt in response
-                    # Remove all stop sequences to see if that's the issue
+                    stream=False,  # Ensure we get a single response, not a stream
                 )
                 
-                response = result["choices"][0]["text"].strip()
-                logger.info(f"GGUF model generated: '{response}' (length: {len(response)})")
+                # Type check to ensure we have the right response format
+                if isinstance(result, dict) and "choices" in result:
+                    response = result["choices"][0]["text"].strip()
+                    logger.info(f"GGUF model generated: '{response}' (length: {len(response)})")
+                else:
+                    logger.error(f"Unexpected result format: {type(result)}")
+                    response = self._generate_mock_response(instruction, context)
                 
             except Exception as e:
                 logger.error(f"GGUF model generation failed: {e}")
-                response = f"Model error: {str(e)}"
+                response = self._generate_mock_response(instruction, context)
                 
         elif self.text_pipeline:
             # HuggingFace model

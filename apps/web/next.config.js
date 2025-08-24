@@ -3,6 +3,11 @@ const nextConfig = {
   experimental: {
     // reactCompiler: true,  // Disabled for now
   },
+  // Increase timeout for API routes to handle AI processing
+  serverRuntimeConfig: {
+    // Timeout in milliseconds - 4 minutes for AI processing
+    timeout: 240000
+  },
   images: {
     remotePatterns: [
       {

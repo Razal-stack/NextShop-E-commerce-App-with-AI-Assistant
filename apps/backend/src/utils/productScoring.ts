@@ -9,8 +9,6 @@ export interface ScoringWeights {
   price: number;
   rating: number;
   reviewCount: number;
-  popularity: number;
-  availability: number;
   relevance: number;
 }
 
@@ -23,12 +21,10 @@ export interface ScoringCriteria {
 
 export class ProductScoringEngine {
   private static readonly DEFAULT_WEIGHTS: ScoringWeights = {
-    price: 0.2,
-    rating: 0.3,
-    reviewCount: 0.2,
-    popularity: 0.15,
-    availability: 0.1,
-    relevance: 0.05
+    price: 0.25,        // Slightly increased since we have fewer metrics
+    rating: 0.35,       // Primary quality indicator 
+    reviewCount: 0.25,  // Trust/popularity proxy (more reviews = more popular)
+    relevance: 0.15     // Text matching relevance
   };
 
   /**
@@ -60,17 +56,9 @@ export class ProductScoringEngine {
     const ratingScore = this.calculateRatingScore(product.rating);
     totalScore += ratingScore * weights.rating;
 
-    // Review Count Score (0-1, higher is better)
+    // Review Count Score (0-1, higher is better) - acts as popularity proxy
     const reviewCountScore = this.calculateReviewCountScore(product.rating.count);
     totalScore += reviewCountScore * weights.reviewCount;
-
-    // Popularity Score (based on rating count and rate combined)
-    const popularityScore = this.calculatePopularityScore(product.rating);
-    totalScore += popularityScore * weights.popularity;
-
-    // Availability Score (assuming all products are available for now)
-    const availabilityScore = 1.0;
-    totalScore += availabilityScore * weights.availability;
 
     // Relevance Score (based on search query match)
     const relevanceScore = this.calculateRelevanceScore(product, context.searchQuery);
@@ -206,21 +194,6 @@ export class ProductScoringEngine {
     return Math.log(count + 1) / Math.log(1001);
   }
 
-  private static calculatePopularityScore(rating: { rate: number; count: number }): number {
-    // Combine rating and count for popularity
-    // Use Wilson confidence interval concept
-    const rate = rating.rate;
-    const count = rating.count;
-    
-    if (count === 0) return 0;
-    
-    // Weight high ratings with good review counts
-    const confidence = count / (count + 10); // Confidence increases with more reviews
-    const adjustedRating = (rate * confidence) + (2.5 * (1 - confidence)); // Default to neutral for low counts
-    
-    return adjustedRating / 5.0;
-  }
-
   private static calculateRelevanceScore(product: Product, searchQuery?: string): number {
     if (!searchQuery || searchQuery.trim() === '') {
       return 0.5; // Default relevance when no search query
@@ -270,12 +243,10 @@ export class ProductScoringEngine {
         criteria.pricePreference = 'low';
         criteria.weights = {
           ...this.DEFAULT_WEIGHTS,
-          price: 0.4,
-          rating: 0.2,
-          reviewCount: 0.2,
-          popularity: 0.15,
-          availability: 0.05,
-          relevance: 0.0
+          price: 0.5,       // Primary focus on price
+          rating: 0.2,      // Still want decent quality
+          reviewCount: 0.2, // Trust indicator
+          relevance: 0.1    // Less important for budget shopping
         };
         break;
 
@@ -283,12 +254,10 @@ export class ProductScoringEngine {
         criteria.pricePreference = 'high';
         criteria.weights = {
           ...this.DEFAULT_WEIGHTS,
-          price: 0.15,
-          rating: 0.4,
-          reviewCount: 0.25,
-          popularity: 0.15,
-          availability: 0.05,
-          relevance: 0.0
+          price: 0.1,       // Price less important
+          rating: 0.5,      // Quality is key
+          reviewCount: 0.3, // Trust/reputation important
+          relevance: 0.1    // Search relevance
         };
         break;
 
@@ -296,24 +265,20 @@ export class ProductScoringEngine {
         criteria.prioritizePopularity = true;
         criteria.weights = {
           ...this.DEFAULT_WEIGHTS,
-          price: 0.1,
-          rating: 0.25,
-          reviewCount: 0.25,
-          popularity: 0.35,
-          availability: 0.05,
-          relevance: 0.0
+          price: 0.15,      // Less focus on price
+          rating: 0.3,      // Quality matters
+          reviewCount: 0.45, // High review count = popular
+          relevance: 0.1    // Search relevance
         };
         break;
 
       case 'search_results':
         criteria.weights = {
           ...this.DEFAULT_WEIGHTS,
-          price: 0.15,
-          rating: 0.25,
-          reviewCount: 0.15,
-          popularity: 0.15,
-          availability: 0.05,
-          relevance: 0.25
+          price: 0.2,       // Balanced price consideration
+          rating: 0.3,      // Quality important
+          reviewCount: 0.2, // Trust factor
+          relevance: 0.3    // High relevance for search
         };
         break;
 

@@ -192,7 +192,7 @@ export class AIResultPreprocessor {
         label: refinement.label,
         description: refinement.description,
         action: () => onRefineSearch(refinement.query),
-        icon: '🔍'
+        icon: 'search'
       });
     });
     
@@ -355,7 +355,7 @@ export class AIResultPreprocessor {
       'jewelery': '💎'
     };
     
-    return iconMap[category] || '🛍️';
+    return iconMap[category] || 'shopping-bag';
   }
 
   /**

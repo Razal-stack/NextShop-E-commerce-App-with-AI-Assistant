@@ -34,5 +34,5 @@ router.put('/:id',
 // DELETE /api/carts/:id - Delete cart
 router.delete('/:id', validateParams(CartIdSchema), cartController.deleteCart);
 
-const cartsRoutes = router;
+const cartsRoutes: Router = router;
 export default cartsRoutes;

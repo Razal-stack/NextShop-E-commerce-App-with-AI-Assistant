@@ -256,12 +256,12 @@ export class ChatHistoryService {
 
     // General queries
     if (text.includes('find') || text.includes('search') || text.includes('show') || text.includes('looking')) {
-      return `🔍 Product Search`;
+      return `Product Search`;
     }
 
     // Fallback to first few words
     const words = text.split(' ').slice(0, 4).join(' ');
-    return `💬 ${words.charAt(0).toUpperCase() + words.slice(1)}`;
+    return `${words.charAt(0).toUpperCase() + words.slice(1)}`;
   }
 
   /**
