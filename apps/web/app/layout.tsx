@@ -5,7 +5,7 @@ import Header from '@/components/layout/Header';
 import ConditionalLayout from '@/components/layout/ConditionalLayout';
 import Cart from '@/components/features/Cart';
 import Wishlist from '@/components/features/Wishlist';
-import DraggableNexAssistant from '@/components/features/products/DraggableNexAssistant';
+import { NexAssistantWrapper } from '@/components/assistant/NexAssistantWrapper';
 import './globals.css';
 
 const inter = Inter({ subsets: ['latin'] });
@@ -56,7 +56,7 @@ export default function RootLayout({ children }: RootLayoutProps) {
           </div>
           <Cart />
           <Wishlist />
-          <DraggableNexAssistant />
+          <NexAssistantWrapper />
         </Providers>
       </body>
     </html>
