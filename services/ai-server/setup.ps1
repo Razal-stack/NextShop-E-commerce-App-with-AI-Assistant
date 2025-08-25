@@ -15,5 +15,9 @@ Write-Host "Activating virtual environment..." -ForegroundColor Yellow
 Write-Host "Installing dependencies..." -ForegroundColor Yellow
 pip install -e .[dev]
 
+# Download AI models automatically
+Write-Host "Setting up AI models (this may take 10-15 minutes)..." -ForegroundColor Yellow
+python download_models.py
+
 Write-Host "Setup complete! ✓" -ForegroundColor Green
 Write-Host "Run 'python dev.py' to start the development server" -ForegroundColor Cyan

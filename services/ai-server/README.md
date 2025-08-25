@@ -1,26 +1,53 @@
-# AI Server - Simple Setup Like Your Webapp
+# AI Server - Simple Setup with Auto Model Downloads
 
 ## Prerequisites
 
 - **Python 3.13+** (that's it!)
 - Check: `python --version` should show 3.13 or higher
 
-## Quick Start (Just Like `pnpm i` and `pnpm dev`)
+## Quick Start (Auto-downloads AI models)
 
 ```bash
-# 1. Install dependencies (like 'pnpm i')
+# 1. Install dependencies + download models (like 'pnpm i')
 python install.py
 
 # 2. Start development server (like 'pnpm dev') 
 python dev.py
 ```
 
+**OR use the setup script:**
+```bash
+# Windows - Downloads everything automatically
+.\setup.ps1
+```
+
 **That's it!** Server runs at `http://localhost:8000`
+
+### What Gets Downloaded Automatically (Smart Selection)
+
+**The script automatically detects your RAM and downloads the best model:**
+
+- **< 6GB RAM:** Qwen 2.5 3B (2.2GB) - Lightweight, good quality
+- **6-8GB RAM:** Mistral 7B Q4 (4.1GB) - Better quality, medium size  
+- **8-12GB RAM:** Qwen 2.5 7B Q4 (4.4GB) - High quality, optimal size
+- **> 12GB RAM:** Qwen 2.5 14B Q4 (8.5GB) - Best quality, large model
+- **Vision Model:** BLIP Image Captioning (800MB) - Always included
+
+**Total download varies by your system:** 3-9GB depending on your RAM
+
+### Manual Model Download (if needed)
+
+```bash
+# After installing dependencies, download models separately
+python download_models.py
+```
 
 ### What Each Script Does
 
 - `install.py` = `pnpm i` for Python (creates venv, installs all dependencies)
+- `download_models.py` = Downloads AI models automatically 
 - `dev.py` = `pnpm dev` for Python (starts development server with hot reload)
+- `setup.ps1` = Does everything in one command (Windows)
 
 ### Works Immediately
 

@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from app.schemas import (
     ReasoningRequest, 
     AppSpecificReasoningRequest,
+    AppSpecificImageReasoningRequest,
     ImageReasoningRequest,
     ReasoningResponse
 )
@@ -83,6 +84,39 @@ class AIController:
         
         except Exception as e:
             logger.error(f"Error in app reasoning: {e}")
+            raise HTTPException(status_code=500, detail="Internal server error")
+    
+    @staticmethod
+    async def handle_app_image_reasoning(request: AppSpecificImageReasoningRequest) -> Dict[str, Any]:
+        """Handle app-specific image reasoning request"""
+        try:
+            # Convert the entire request to a dictionary for context
+            request_dict = request.model_dump()
+            
+            # Add timeout protection (longer for image processing)
+            image_timeout = REQUEST_TIMEOUT * 2  # 10 minutes for app image processing
+            result = await asyncio.wait_for(
+                AIService.process_app_image_reasoning(
+                    app_name=request.app_name,
+                    user_query=request.user_query,
+                    image_data=request.image_data,
+                    context_data=request_dict  # Pass the entire request as context
+                ),
+                timeout=image_timeout
+            )
+            
+            return result
+        
+        except asyncio.TimeoutError:
+            logger.error(f"App image reasoning timed out after {REQUEST_TIMEOUT * 2}s for app: {request.app_name}")
+            raise HTTPException(status_code=408, detail="Request timeout: Image processing took too long")
+        
+        except ValueError as e:
+            logger.error(f"Validation error in app image reasoning: {e}")
+            raise HTTPException(status_code=400, detail=str(e))
+        
+        except Exception as e:
+            logger.error(f"Error in app image reasoning: {e}")
             raise HTTPException(status_code=500, detail="Internal server error")
     
     @staticmethod

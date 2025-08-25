@@ -80,6 +80,83 @@ router.post('/query', async (req: Request, res: Response) => {
 });
 
 /**
+ * Image Recognition Endpoint - MCP Architecture with Vision
+ * Combines image analysis + text query processing
+ */
+router.post('/query-image', async (req: Request, res: Response) => {
+  try {
+    const { query, imageData, userId, conversationHistory, context } = req.body;
+    
+    if (!query || typeof query !== 'string') {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Missing or invalid query parameter' 
+      });
+    }
+
+    if (!imageData || typeof imageData !== 'string') {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Missing or invalid imageData parameter' 
+      });
+    }
+
+    const startTime = Date.now();
+    
+    console.log(`[AI Routes] Processing image query: "${query}"`);
+    console.log(`[AI Routes] User ID: ${userId || 'anonymous'}`);
+    console.log(`[AI Routes] Image data length: ${imageData.length}`);
+    
+    // Add user message to history
+    aiService.addToHistory('user', `[IMAGE] ${query}`);
+
+    // Process with AI service using image recognition
+    const result = await aiService.processImageQuery(
+      query,
+      imageData,
+      context || { userId: userId || 1 },
+      conversationHistory || []
+    );
+
+    // Add AI response to history
+    aiService.addToHistory('assistant', result.message);
+
+    const processingTime = Date.now() - startTime;
+    console.log(`[AI Routes] Image query processed in ${processingTime}ms`);
+    console.log(`[AI Routes] Intent: ${result.intent}, UI Handlers: ${JSON.stringify(result.uiHandlers)}`);
+
+    // Return structured response format matching frontend MCP client expectations
+    res.json({ 
+      success: result.success,
+      result: {
+        message: result.message,
+        displayMode: 'dual_view', // Show products + chat
+        data: result.data,
+        actions: [], // Future: navigation actions
+        totalFound: result.data?.totalFound
+      },
+      metadata: {
+        ...result.metadata,
+        processingTime,
+        timestamp: new Date().toISOString(),
+        architecture: 'mcp-vision',
+        intent: result.intent,
+        hasImage: true // Only difference - indicates this was an image query
+      }
+    });
+
+  } catch (error) {
+    console.error('[AI Routes] Image query processing failed:', error);
+    
+    res.status(500).json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Internal server error',
+      details: 'AI image query processing failed'
+    });
+  }
+});
+
+/**
  * Health check endpoint for AI service
  */
 router.get('/health', async (req: Request, res: Response) => {

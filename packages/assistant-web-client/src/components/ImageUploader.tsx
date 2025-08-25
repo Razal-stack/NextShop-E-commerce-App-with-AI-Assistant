@@ -4,8 +4,6 @@ import React, { useState, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Image as ImageIcon, X, Upload } from 'lucide-react';
 
-// Import styles
-
 // ==================== TYPES ====================
 
 export interface ImageUploaderProps {
@@ -43,7 +41,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
     fileInputRef.current?.click();
   }, [disabled]);
 
-  // Process selected file
+  // Process selected file (simple version - compression happens in service)
   const handleFileChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -66,7 +64,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
       // Create preview URL
       const preview = URL.createObjectURL(file);
 
-      // Convert to base64
+      // Convert to base64 - simple conversion, compression happens in mcpService
       const base64 = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = (e) => {
@@ -84,7 +82,7 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
       };
 
       onImageSelect(imageData);
-      console.log('📷 Image uploaded:', file.name, file.type, file.size);
+      console.log('📷 Image uploaded (compression will happen in service):', file.name, file.type, file.size);
 
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to process image.';

@@ -6,7 +6,7 @@ from typing import Dict, Any
 from pydantic import ValidationError
 
 from app.controllers.ai_controller import AIController
-from app.schemas import ReasoningRequest, AppSpecificReasoningRequest, ImageReasoningRequest, ReasoningResponse
+from app.schemas import ReasoningRequest, AppSpecificReasoningRequest, AppSpecificImageReasoningRequest, ImageReasoningRequest, ReasoningResponse
 
 router = APIRouter()
 
@@ -25,6 +25,15 @@ async def app_specific_reasoning(request: AppSpecificReasoningRequest) -> Dict[s
     """App-specific reasoning with dynamic configuration"""
     try:
         return await AIController.handle_app_reasoning(request)
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=f"Validation error: {e}")
+
+
+@router.post("/app-image-reason")
+async def app_specific_image_reasoning(request: AppSpecificImageReasoningRequest) -> Dict[str, Any]:
+    """App-specific reasoning with image and dynamic configuration"""
+    try:
+        return await AIController.handle_app_image_reasoning(request)
     except ValidationError as e:
         raise HTTPException(status_code=422, detail=f"Validation error: {e}")
 

@@ -62,7 +62,7 @@ export const nexAssistantConfig: NexAssistantConfig = {
     },
     { 
       icon: ShoppingCart, 
-      text: "Find men's jacket under 100 pound and add it to cart", 
+      text: "Find men's jacket under £100 and add it to cart", 
       category: "menswear" 
     },
     { 

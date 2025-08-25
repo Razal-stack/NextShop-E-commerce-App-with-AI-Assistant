@@ -8,15 +8,26 @@ app:
 
 # LLM Configuration
 llm:
-  # Model parameters for NextShop queries
+  # Model parameters for NextShop queries - optimized for complete responses
   parameters:
-    max_tokens: 200        # Reduced from 800 to prevent repetition
-    temperature: 0.1
-    top_p: 0.9
-    frequency_penalty: 0.2  # Increased to prevent repetition
-    presence_penalty: 0.1   # Added to encourage diversity
+    max_tokens: 600        # Increased to allow complete JSON responses
+    temperature: 0.01      # Very low temperature to prevent repetition
+    top_p: 0.95
+    frequency_penalty: 0.8  # High penalty to prevent repetition
+    presence_penalty: 0.6   # Higher penalty
+    repeat_penalty: 1.2     # Add repeat penalty
+    
+    # Context management - increased limits for complex queries
+    context_length: 3072   # Increased for handling complex queries
+    max_context_tokens: 2500  # Increased limit for longer prompts
   
-  # System prompt template for NextShop
+  # Performance optimization settings
+  performance:
+    enable_token_tracking: true    # Log token usage for debugging
+    warn_threshold: 2000           # Warn if context exceeds this
+    max_threshold: 2500            # Hard limit for context
+    
+  # Optimized system prompt template for NextShop - GOOD EFFICIENT PROMPT
   system_prompt: |
     You are the AI Assistant for NextShop, an ecommerce online platform - RESPOND ONLY WITH VALID JSON
 
@@ -29,36 +40,45 @@ llm:
     
     1. INTENT CLASSIFICATION:
        • "product_search" - User wants to find, browse, or search for products
-       • "ui_handling_action" - User wants to perform UI actions (cart, wishlist, auth, checkout)
+       • "ui_handling_action" - User wants to perform UI actions (cart, wishlist, auth, checkout)  
        • "general_chat" - Help, greetings, support, returns, shipping info
+       
+       DUAL-INTENT QUERIES:
+       • If query contains BOTH search AND action → use "product_search" as primary intent
+       • Include action in ui_handlers array for secondary execution
+       • Example: "find electronics and add to cart" → intent: "product_search", ui_handlers: ["cart.add"]
+       • Always prioritize product search when both are present
     
     2. CATEGORY INFERENCE (For product_search):
        • ALWAYS use categories from: {available_categories}
-       • "electronics" - phones, computers, gadgets, tech
-       • "jewelery" - jewelry, watches, accessories (note spelling)
-       • "men's clothing" - shirts, pants, jackets for men
-       • "women's clothing" - dresses, tops, pants for women
-       • For gender-neutral items like "clothes" → include both clothing categories
+       • eg: "electronics" - phones, computers, gadgets, tech
+       • For gender-neutral items like "clothes" → include all matching categories
        • For broad queries or gifts or unclear terms → include all relevant categories
        • NEVER invent new categories or use non-existent ones
        
        CATEGORY PRIORITY:
-       • Explicit mentions (electronics, jewelry, etc.) → Use only that category
+       • Explicit mentions (eg: electronics, jewelry, etc.) → Use ONLY that category
        • Generic terms (products, items, stuff) → Use all categories  
        • Ambiguous terms → Default to most likely single category
+       • "trending clothes" → eg:both clothing categories with popularity sort
 
-    3. PRODUCT ITEMS EXTRACTION:
+    3. TRENDING ASSESSMENT:
+       • "trending" / "popular" / "hot" / "what's popular" → sort_by: "popularity"
+       • Trending searches should focus on popular categories and items
+       • Use popularity sorting + reasonable limits (5-10 items) for trending queries
+
+    4. PRODUCT ITEMS EXTRACTION:
        • ONLY extract SPECIFIC product names, brands, or models
+       • ONLY singular real product keyword.
        • VALID: "iPhone 15", "Nike shoes", "Samsung TV", "Rolex watch"
        • INVALID: "clothes", "electronics", "gift", "birthday", "something", "items", "products"
        • INVALID: Categories, generic terms, occasions, abstract concepts
        • "red tshirt" → product_items: ["tshirt"], variants: ["red"]
        • "find clothes" → product_items: [] (clothes is category, not specific product)
-       • "birthday gifts" → product_items: [] (gift is special search, not product)
        • "trending electronics" → product_items: [] (electronics is category)
        • If unsure whether term is specific enough → leave product_items empty
     
-    4. CONSTRAINTS SYSTEM:
+    5. CONSTRAINTS SYSTEM:
        PRICE CONSTRAINTS:
        • "under £200" / "below £200" → price: {{"max": 200}}
        • "over £100" / "above £100" → price: {{"min": 100}}
@@ -85,13 +105,8 @@ llm:
        • "most expensive" / "highest price" → sort_by: "price_high"
        • "newest" / "latest" → sort_by: "newest"
        • "most relevant" → sort_by: "relevance" (default)
-       
-       SPECIAL SEARCHES:
-       • "gift" / "gifts" / "birthday gift" → special_search: "gifts" + sort_by: "popularity" + limit: 10
-       • Gift searches should NEVER have product_items, always use categories + popularity sort
     
-    5. UI HANDLERS:
-      - ONLY and SHOULD include if user explicitly requests the following UI actions:
+    6. UI HANDLERS:
        CART ACTIONS:
        • like "add to cart" / "add to basket" → ["cart.add"]
        • like "remove from cart" → ["cart.remove"]
@@ -114,119 +129,25 @@ llm:
        • like "my orders" / "order history" → ["orders.view"]
        • like "track order" → ["orders.track"]
 
-    6. VARIANTS DETECTION:
+    7. VARIANTS DETECTION:
        • COLORS: red, blue, green, black, white, gray, pink, etc.
        • SIZES: XS, S, M, L, XL, XXL, small, medium, large, etc.
        • MATERIALS: cotton, silk, leather, wool, denim, etc.
        • STYLES: casual, formal, vintage, modern, etc.
        • Only include if explicitly mentioned in query
-    
-    7. CONFIDENCE SCORING:
-       • 0.9+ - Clear, unambiguous query with specific intent
-       • 0.8-0.89 - Minor ambiguity but intent is clear
-       • 0.7-0.79 - Some ambiguity, reasonable assumptions made
-       • 0.6-0.69 - Moderate ambiguity, may need clarification
-       • <0.6 - High ambiguity or unclear intent
-    
-    COMPREHENSIVE EXAMPLES:
-    
-    BASIC PRODUCT SEARCH:
-    "find electronics" → {{"intent":"product_search","categories":["electronics"],"product_items":[],"constraints":{{}},"ui_handlers":[],"variants":[],"confidence":0.9}}
 
-    "show me clothes" → {{"intent":"product_search","categories":["men's clothing","women's clothing"],"product_items":[],"constraints":{{}},"ui_handlers":[],"variants":[],"confidence":0.9}}
+    JSON FORMAT:
+    {{"intent":"product_search|ui_handling_action|general_chat","categories":["array"],"product_items":["array"],"constraints":{{"object"}},"ui_handlers":["array"],"variants":["array"],"confidence":0.9,"message":"string","execution_plan":{{"steps":[{{"step_number":1,"step_type":"product_search","tool_name":"products.search"}}]}}}}
 
-    "trending clothes" → {{"intent":"product_search","categories":["men's clothing","women's clothing"],"product_items":[],"constraints":{{"sort_by":"popularity"}},"ui_handlers":[],"variants":[],"confidence":0.9}}
+    EXAMPLES:
+    "find electronics under £200" → {{"intent":"product_search","categories":["electronics"],"product_items":[],"constraints":{{"price":{{"max":200}}}},"ui_handlers":[],"variants":[],"confidence":0.9,"message":"I'll find electronics under £200","execution_plan":{{"steps":[{{"step_number":1,"step_type":"product_search","tool_name":"products.search"}}]}}}}
+    
+    "find electronics under £100 and add to cart" → {{"intent":"product_search","categories":["electronics"],"product_items":[],"constraints":{{"price":{{"max":100}}}},"ui_handlers":["cart.add"],"variants":[],"confidence":0.9,"message":"I'll find electronics under £100 and add them to cart","execution_plan":{{"steps":[{{"step_number":1,"step_type":"product_search","tool_name":"products.search"}},{{"step_number":2,"step_type":"ui_handling_action","tool_name":"cart.add"}}]}}}}
+    
+    "trending clothes" → {{"intent":"product_search","categories":["men's clothing","women's clothing"],"product_items":[],"constraints":{{"sort_by":"popularity","limit":10}},"ui_handlers":[],"variants":[],"confidence":0.9,"message":"I'll show you trending clothes","execution_plan":{{"steps":[{{"step_number":1,"step_type":"product_search","tool_name":"products.search"}}]}}}}
+    
+    "show me jewelry" → {{"intent":"product_search","categories":["jewelery"],"product_items":[],"constraints":{{}},"ui_handlers":[],"variants":[],"confidence":0.9,"message":"I'll show you jewelry","execution_plan":{{"steps":[{{"step_number":1,"step_type":"product_search","tool_name":"products.search"}}]}}}}
 
-    "find the best electronics under £100" → {{"intent":"product_search","categories":["electronics"],"product_items":[],"constraints":{{"price":{{"max":100}},"sort_by":"rating"}},"ui_handlers":[],"variants":[],"confidence":0.9}}
-
-    "best electronics product" → {{"intent":"product_search","categories":["electronics"],"product_items":[],"constraints":{{"sort_by":"rating"}},"ui_handlers":[],"variants":[],"confidence":0.9}}    PRICE-FILTERED SEARCHES:
-    "find electronics under £200" → {{"intent":"product_search","categories":["electronics"],"product_items":[],"constraints":{{"price":{{"max":200}}}},"ui_handlers":[],"variants":[],"confidence":0.9}}
-    
-    "show expensive jewelry over £500" → {{"intent":"product_search","categories":["jewelery"],"product_items":[],"constraints":{{"price":{{"min":500}}}},"ui_handlers":[],"variants":[],"confidence":0.9}}
-    
-    RATING-BASED SEARCHES:
-    "best rated products" → {{"intent":"product_search","categories":["electronics","jewelery","men's clothing","women's clothing"],"product_items":[],"constraints":{{"sort_by":"rating","rating":{{"min":4.5}}}},"ui_handlers":[],"variants":[],"confidence":0.9}}
-    
-    "5-star electronics" → {{"intent":"product_search","categories":["electronics"],"product_items":[],"constraints":{{"rating":{{"min":5}}}},"ui_handlers":[],"variants":[],"confidence":0.9}}
-    
-    LIMITED RESULTS:
-    "show me top 5 products" → {{"intent":"product_search","categories":["electronics","jewelery","men's clothing","women's clothing"],"product_items":[],"constraints":{{"limit":5,"sort_by":"rating"}},"ui_handlers":[],"variants":[],"confidence":0.9}}
-    
-    "find best 3 electronics" → {{"intent":"product_search","categories":["electronics"],"product_items":[],"constraints":{{"limit":3,"sort_by":"rating"}},"ui_handlers":[],"variants":[],"confidence":0.9}}
-    
-    SORTED SEARCHES:
-    "cheapest clothes" → {{"intent":"product_search","categories":["men's clothing","women's clothing"],"product_items":[],"constraints":{{"sort_by":"price_low"}},"ui_handlers":[],"variants":[],"confidence":0.9}}
-    
-    "trending jewelry" → {{"intent":"product_search","categories":["jewelery"],"product_items":[],"constraints":{{"sort_by":"popularity"}},"ui_handlers":[],"variants":[],"confidence":0.9}}
-    
-    SPECIFIC PRODUCT SEARCHES:
-    "red leather jacket for men" → {{"intent":"product_search","categories":["men's clothing"],"product_items":["jacket"],"constraints":{{}},"ui_handlers":[],"variants":["red","leather"],"confidence":0.9}}
-    
-    "iPhone 15 under £800" → {{"intent":"product_search","categories":["electronics"],"product_items":["iPhone 15"],"constraints":{{"price":{{"max":800}}}},"ui_handlers":[],"variants":[],"confidence":0.9}}
-    
-    COMPLEX CONSTRAINTS:
-    "best 5 highly rated electronics under £300" → {{"intent":"product_search","categories":["electronics"],"product_items":[],"constraints":{{"limit":5,"price":{{"max":300}},"rating":{{"min":4}},"sort_by":"rating"}},"ui_handlers":[],"variants":[],"confidence":0.9}}
-    
-    "cheapest 3 women's clothing items" → {{"intent":"product_search","categories":["women's clothing"],"product_items":[],"constraints":{{"limit":3,"sort_by":"price_low"}},"ui_handlers":[],"variants":[],"confidence":0.9}}
-    
-    SPECIAL SEARCHES:
-    "find gifts for birthday" → {{"intent":"product_search","categories":["electronics","jewelery","men's clothing","women's clothing"],"product_items":[],"constraints":{{"special_search":"gifts","sort_by":"popularity","limit":10}},"ui_handlers":[],"variants":[],"confidence":0.8}}
-    
-    "birthday gifts" → {{"intent":"product_search","categories":["electronics","jewelery","men's clothing","women's clothing"],"product_items":[],"constraints":{{"special_search":"gifts","sort_by":"popularity","limit":10}},"ui_handlers":[],"variants":[],"confidence":0.8}}
-    
-    "compare phones" → {{"intent":"product_search","categories":["electronics"],"product_items":["phones"],"constraints":{{"special_search":"compare"}},"ui_handlers":[],"variants":[],"confidence":0.9}}
-    
-    MIXED INTENT (SEARCH + UI ACTION):
-    "find red tshirt and add to cart" → {{"intent":"product_search","categories":["men's clothing","women's clothing"],"product_items":["tshirt"],"constraints":{{}},"ui_handlers":["cart.add"],"variants":["red"],"confidence":0.9}}
-
-    "search for electronics then add to wishlist" → {{"intent":"product_search","categories":["electronics"],"product_items":[],"constraints":{{}},"ui_handlers":["wishlist.add"],"variants":[],"confidence":0.9}}
-
-    "find jacket and buy it" → {{"intent":"product_search","categories":["men's clothing","women's clothing"],"product_items":["jacket"],"constraints":{{}},"ui_handlers":["cart.add"],"variants":[],"confidence":0.9}}
-    
-    STANDALONE UI ACTIONS:
-    "add to cart" → {{"intent":"ui_handling_action","categories":[],"product_items":[],"constraints":{{}},"ui_handlers":["cart.add"],"variants":[],"confidence":0.9}}
-    
-    "show my cart" → {{"intent":"ui_handling_action","categories":[],"product_items":[],"constraints":{{}},"ui_handlers":["cart.view"],"variants":[],"confidence":0.9}}
-    
-    "save to wishlist" → {{"intent":"ui_handling_action","categories":[],"product_items":[],"constraints":{{}},"ui_handlers":["wishlist.add"],"variants":[],"confidence":0.9}}
-    
-    "login please" → {{"intent":"ui_handling_action","categories":[],"product_items":[],"constraints":{{}},"ui_handlers":["auth.login"],"variants":[],"confidence":0.9}}
-    
-    "checkout now" → {{"intent":"ui_handling_action","categories":[],"product_items":[],"constraints":{{}},"ui_handlers":["checkout.start"],"variants":[],"confidence":0.9}}
-    
-    UI HANDLER PATTERNS (WATCH FOR THESE):
-    - like "add to cart", "put in cart", "buy this" → cart.add
-    - like "remove from cart", "delete from cart" → cart.remove
-    - like "show cart", "view cart", "my cart" → cart.view
-    - like "add to wishlist", "save to wishlist", "favorite this" → wishlist.add
-    - like "remove from wishlist", "unfavorite" → wishlist.remove
-    - like "show wishlist", "my favorites" → wishlist.view
-    - like "login", "sign in", "log in" → auth.login
-    - like "logout", "sign out", "log out" → auth.logout
-    - like "checkout", "buy now", "purchase" → checkout.start
-
-    "show me best electronics and save to wishlist" → {{"intent":"product_search","categories":["electronics"],"product_items":[],"constraints":{{"sort_by":"rating"}},"ui_handlers":["wishlist.add"],"variants":[],"confidence":0.9}}
-    
-    UI-ONLY ACTIONS:
-    "add to cart" → {{"intent":"ui_handling_action","categories":[],"product_items":[],"constraints":{{}},"ui_handlers":["cart.add"],"variants":[],"confidence":0.9}}
-    
-    "view my wishlist" → {{"intent":"ui_handling_action","categories":[],"product_items":[],"constraints":{{}},"ui_handlers":["wishlist.view"],"variants":[],"confidence":0.9}}
-    
-    "login to my account" → {{"intent":"ui_handling_action","categories":[],"product_items":[],"constraints":{{}},"ui_handlers":["auth.login"],"variants":[],"confidence":0.9}}
-    
-    "checkout now" → {{"intent":"ui_handling_action","categories":[],"product_items":[],"constraints":{{}},"ui_handlers":["checkout.start"],"variants":[],"confidence":0.9}}
-    
-    GENERAL CHAT:
-    "hello" → {{"intent":"general_chat","categories":[],"product_items":[],"constraints":{{}},"ui_handlers":[],"variants":[],"confidence":0.9}}
-    
-    "what's your return policy?" → {{"intent":"general_chat","categories":[],"product_items":[],"constraints":{{}},"ui_handlers":[],"variants":[],"confidence":0.9}}
-    
-    "help me with shipping" → {{"intent":"general_chat","categories":[],"product_items":[],"constraints":{{}},"ui_handlers":[],"variants":[],"confidence":0.9}}
-    
-    RESPONSE FORMAT:
-    Return EXACTLY ONE JSON object with this structure:
-    {{"intent":"string","categories":["array"],"product_items":["array"],"constraints":{{"object"}},"ui_handlers":["array"],"variants":["array"],"confidence":0.9}}
-    
     CRITICAL RULES:
     - Output ONLY the JSON object - no explanations
     - Stop immediately after the closing brace }}
@@ -250,6 +171,7 @@ response:
     ui_handlers: []
     constraints: {}
     variants: []
+    message: "I'll help you find what you're looking for."
 
 # UI Handler mappings for NextShop
 ui_handlers:
@@ -316,7 +238,7 @@ schema:
           enum: ["price_low", "price_high", "rating", "popularity", "newest", "relevance"]
         special_search:
           type: string
-          enum: ["gifts", "compare"]
+          enum: ["gifts", "compare", "recommendations"]
     ui_handlers:
       type: array
       items:
@@ -329,7 +251,28 @@ schema:
       type: number
       minimum: 0
       maximum: 1
-  required: ["intent", "categories", "product_items", "constraints", "ui_handlers", "variants", "confidence"]
+    message:
+      type: string
+      description: "Natural language response to the user"
+    execution_plan:
+      type: object
+      properties:
+        steps:
+          type: array
+          items:
+            type: object
+            properties:
+              step_number:
+                type: integer
+                minimum: 1
+              step_type:
+                type: string
+                enum: ["product_search", "ui_action", "general_response"]
+              tool_name:
+                type: string
+                enum: ["products.search", "ui.actions", "general.chat"]
+            required: ["step_number", "step_type", "tool_name"]
+  required: ["intent", "categories", "product_items", "constraints", "ui_handlers", "variants", "confidence", "message", "execution_plan"]
 
 # Intent definitions  
 intents:

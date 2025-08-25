@@ -37,6 +37,20 @@ class AppSpecificReasoningResponse(BaseModel):
     app_config_used: str = Field(..., description="App configuration used")
 
 
+class AppSpecificImageReasoningRequest(BaseModel):
+    """Request for app-specific reasoning with image"""
+    app_name: str = Field(..., description="Name of the calling application")
+    user_query: str = Field(..., description="User's natural language query about the image")
+    image_data: str = Field(..., description="Base64 encoded image data")
+    image_format: str = Field(default="jpeg", description="Image format (jpeg, png, etc.)")
+    available_categories: Optional[List[str]] = Field(None, description="Available product categories")
+    conversation_history: Optional[List[Dict[str, Any]]] = Field(None, description="Previous conversation turns")
+    mcp_tools_context: Optional[List[Dict[str, Any]]] = Field(None, description="Available MCP tools")
+    ui_handlers_context: Optional[List[Dict[str, Any]]] = Field(None, description="Available UI handlers")
+    current_filters: Optional[Dict[str, Any]] = Field(None, description="Currently applied filters")
+    user_session: Optional[Dict[str, Any]] = Field(None, description="User session information")
+
+
 class ImageReasoningRequest(BaseModel):
     """Request for image-based reasoning"""
     instruction: str = Field(..., description="What to analyze about the image")

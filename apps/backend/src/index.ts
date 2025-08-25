@@ -15,7 +15,20 @@ app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
   credentials: true
 }));
-app.use(express.json());
+
+// Increase payload size limit for image uploads (base64 images can be large)
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Set request timeout for long-running AI operations (5 minutes)
+app.use((req, res, next) => {
+  // Only apply timeout to AI endpoints
+  if (req.path.startsWith('/api/ai/')) {
+    req.setTimeout(300000); // 5 minutes
+    res.setTimeout(300000); // 5 minutes
+  }
+  next();
+});
 
 // Health check
 app.get('/health', (req, res) => {
@@ -117,6 +130,7 @@ app.listen(PORT, () => {
   console.log(`NextShop MCP Server running on port ${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
   console.log(`MCP endpoint: http://localhost:${PORT}/mcp`);
+  console.log(`Image upload limit: 50MB (for base64 images)`);
   console.log('Available API endpoints:');
   console.log(`  GET  /api/products`);
   console.log(`  GET  /api/products/categories`);

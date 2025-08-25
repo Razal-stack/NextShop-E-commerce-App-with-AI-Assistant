@@ -47,7 +47,17 @@ def main():
         print("Installing dependencies...")
         subprocess.run([pip_exe, "install", "-e", ".[dev]"], check=True)
         
-        print("Installation complete!")
+        # Automatically download optimal models for this system
+        print("\nDownloading AI models...")
+        print("This will select the best models based on your available RAM...")
+        try:
+            subprocess.run([python_exe, "download_models.py"], check=True)
+            print("Models downloaded successfully!")
+        except subprocess.CalledProcessError as e:
+            print(f"Warning: Model download failed: {e}")
+            print("You can download models later by running: python download_models.py")
+        
+        print("\nInstallation complete!")
         print("Run 'python dev.py' to start development server")
         
     except subprocess.CalledProcessError as e:

@@ -15,7 +15,10 @@ dependencies = [
     "torch>=2.0.0",
     "transformers>=4.30.0",
     "pillow>=10.0.0",
-    "python-multipart>=0.0.6"
+    "python-multipart>=0.0.6",
+    "huggingface-hub>=0.16.0",  # For auto-downloading models
+    "llama-cpp-python>=0.2.0",   # For GGUF model support
+    "psutil>=5.9.0"             # For RAM detection
 ]
 
 [project.optional-dependencies]

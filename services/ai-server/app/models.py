@@ -11,8 +11,27 @@ from typing import Optional, Dict, Any, List, Union
 from PIL import Image
 import io
 import base64
+import re
 
 logger = logging.getLogger(__name__)
+
+def estimate_tokens(text: str) -> int:
+    """Simple token estimation - roughly 4 characters per token for English"""
+    if not text:
+        return 0
+    # Simple estimation: split by words and punctuation, account for subword tokens
+    words = re.findall(r'\w+|[^\w\s]', text.lower())
+    # Rough estimate: average 1.3 tokens per word, plus punctuation
+    return int(len(words) * 1.3)
+
+def log_token_usage(context_name: str, text: str):
+    """Log token usage for debugging"""
+    token_count = estimate_tokens(text)
+    char_count = len(text)
+    logger.info(f"Token Usage - {context_name}: ~{token_count} tokens, {char_count} chars")
+    if token_count > 3000:
+        logger.warning(f"HIGH TOKEN COUNT in {context_name}: {token_count} tokens might slow down processing!")
+    return token_count
 
 # Type hint for LLAMA model (avoiding import issues)
 try:
@@ -227,17 +246,80 @@ class AIModelManager:
         self.loaded_models.append("text:mock_reasoning_model")
     
     async def initialize_vision_model(self):
-        """Initialize vision model if available"""
+        """Initialize vision model - either local or from HuggingFace Hub"""
         vision_model = self._get_best_vision_model()
+        
         if vision_model:
-            logger.info(f"Vision model found: {vision_model['name']}")
-            self.vision_model = "mock_vision_placeholder"  # Placeholder for now
-            self.loaded_models.append(f"vision:{vision_model['name']}")
+            # Use local vision model
+            logger.info(f"Local vision model found: {vision_model['name']}")
+            await self._load_local_vision_model(vision_model)
         else:
-            logger.info("No vision models found, vision capabilities disabled")
+            # Load from HuggingFace Hub - best models for product recognition
+            logger.info("No local vision models found, loading from HuggingFace Hub...")
+            await self._load_huggingface_vision_model()
+    
+    async def _load_local_vision_model(self, model_info: Dict[str, Any]):
+        """Load local vision model"""
+        try:
+            from transformers import pipeline
+            
+            self.vision_pipeline = pipeline(
+                "image-to-text", 
+                model=model_info["path"],
+                device=0 if self.device == "cuda" else -1
+            )
+            
+            self.loaded_models.append(f"vision:{model_info['name']}")
+            logger.info(f"Local vision model loaded: {model_info['name']}")
+            
+        except Exception as e:
+            logger.error(f"Failed to load local vision model: {e}")
+            await self._load_huggingface_vision_model()
+    
+    async def _load_huggingface_vision_model(self):
+        """Load pre-trained vision model from HuggingFace for product recognition"""
+        try:
+            from transformers import pipeline
+            
+            # Try multiple models in order of preference - focusing on reliable image captioning
+            vision_models = [
+                "microsoft/git-base-coco",                 # Microsoft GIT - excellent for product images
+                "nlpconnect/vit-gpt2-image-captioning",    # ViT-GPT2 - fast and reliable
+                "Salesforce/blip-image-captioning-base",   # BLIP base - smaller, faster
+                "microsoft/git-large-coco"                 # GIT large - more detailed (slower)
+            ]
+            
+            for model_name in vision_models:
+                try:
+                    logger.info(f"Attempting to load vision model: {model_name}")
+                    self.vision_pipeline = pipeline(
+                        "image-to-text",
+                        model=model_name,
+                        device=0 if self.device == "cuda" else -1,
+                        torch_dtype=torch.float16 if self.device == "cuda" else torch.float32
+                    )
+                    
+                    self.loaded_models.append(f"vision:{model_name}")
+                    logger.info(f"Successfully loaded vision model: {model_name}")
+                    return
+                    
+                except Exception as e:
+                    logger.warning(f"Failed to load {model_name}: {e}")
+                    continue
+            
+            # If all models fail, disable vision
+            logger.error("Failed to load any vision model, vision capabilities disabled")
+            self.vision_pipeline = None
+            
+        except ImportError as e:
+            logger.error(f"Missing dependencies for vision models: {e}")
+            self.vision_pipeline = None
+        except Exception as e:
+            logger.error(f"Unexpected error loading vision model: {e}")
+            self.vision_pipeline = None
     
     async def generate_text(self, instruction: str, context: Optional[str] = None, **kwargs) -> Dict[str, Any]:
-        """Generate text based on instruction and context"""
+        """Generate text based on instruction and context with token tracking"""
         if not self.text_model and not self.text_pipeline:
             raise RuntimeError("No text model loaded")
         
@@ -249,12 +331,31 @@ class AIModelManager:
         else:
             prompt = f"Instruction: {instruction}\n\nResponse:"
         
+        # Log token usage for debugging
+        prompt_tokens = log_token_usage("INPUT_PROMPT", prompt)
+        if context:
+            context_tokens = log_token_usage("CONTEXT_DATA", context)
+        else:
+            context_tokens = 0
+        instruction_tokens = log_token_usage("INSTRUCTION", instruction)
+        
+        total_input_tokens = prompt_tokens
+        logger.info(f"TOTAL INPUT TOKENS: {total_input_tokens} (Context: {context_tokens}, Instruction: {instruction_tokens})")
+        
+        # Check if we're approaching token limits
+        if total_input_tokens > 3500:
+            logger.warning(f"Very high input token count ({total_input_tokens})! This may cause slowdowns or failures.")
+        elif total_input_tokens > 2500:
+            logger.warning(f"High input token count ({total_input_tokens}) - consider reducing context size.")
+        
         # Generate response
         if self.text_model:
             # GGUF model (llama-cpp-python)
             try:
                 max_tokens = kwargs.get("max_tokens", 500)  # Increased default for complete JSON responses
                 temperature = kwargs.get("temperature", 0.1)  # Lower temperature for more consistent output
+                
+                logger.info(f"GGUF Model Settings: max_tokens={max_tokens}, temperature={temperature}")
                 
                 # Use the create_completion method for llama-cpp-python
                 result = self.text_model.create_completion(
@@ -268,20 +369,25 @@ class AIModelManager:
                 # Type check to ensure we have the right response format
                 if isinstance(result, dict) and "choices" in result:
                     response = result["choices"][0]["text"].strip()
-                    logger.info(f"GGUF model generated: '{response}' (length: {len(response)})")
+                    output_tokens = log_token_usage("OUTPUT_RESPONSE", response)
+                    logger.info(f"GGUF model generated: '{response}' (length: {len(response)}, ~{output_tokens} tokens)")
                 else:
                     logger.error(f"Unexpected result format: {type(result)}")
                     response = self._generate_mock_response(instruction, context)
+                    output_tokens = log_token_usage("FALLBACK_RESPONSE", response)
                 
             except Exception as e:
                 logger.error(f"GGUF model generation failed: {e}")
                 response = self._generate_mock_response(instruction, context)
+                output_tokens = log_token_usage("FALLBACK_RESPONSE", response)
                 
         elif self.text_pipeline:
             # HuggingFace model
             try:
                 max_length = min(kwargs.get("max_tokens", 500), 1024)  # Increased limits for complete responses
                 temperature = kwargs.get("temperature", 0.7)
+                
+                logger.info(f"HF Pipeline Settings: max_length={max_length}, temperature={temperature}")
                 
                 result = self.text_pipeline(
                     prompt,
@@ -316,30 +422,127 @@ class AIModelManager:
             return f"I understand your instruction: {instruction}. This is a mock response from the AI reasoning server. In production, this would be generated by your local AI model."
     
     async def analyze_image(self, instruction: str, image_data: str, **kwargs) -> Dict[str, Any]:
-        """Analyze image based on instruction"""
-        if not self.vision_model:
+        """Simple image analysis - just get basic description"""
+        if not hasattr(self, 'vision_pipeline') or self.vision_pipeline is None:
             raise RuntimeError("No vision model loaded")
         
         start_time = time.time()
         
-        # Decode and validate image
+        # Decode image
         try:
-            image_bytes = base64.b64decode(image_data)
+            if image_data.startswith('data:image/'):
+                header, base64_data = image_data.split(',', 1)
+                image_bytes = base64.b64decode(base64_data)
+            else:
+                image_bytes = base64.b64decode(image_data)
+            
             image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         except Exception as e:
+            logger.error(f"Failed to decode image: {e}")
             raise ValueError(f"Invalid image data: {e}")
         
-        # Mock vision analysis
-        response = f"Image analysis for instruction: {instruction}. Image size: {image.width}x{image.height}. This is a mock vision response. In production, this would be analyzed by your local vision model."
-        
-        processing_time = (time.time() - start_time) * 1000
-        
-        return {
-            "result": response,
-            "processing_time_ms": processing_time,
-            "model_used": "vision:mock_model",
-            "image_size": f"{image.width}x{image.height}"
-        }
+        try:
+            # Simple vision analysis - just get description
+            result = self.vision_pipeline(image, max_new_tokens=100)
+            
+            # Extract simple description
+            description = 'Product image detected'
+            if isinstance(result, str):
+                description = result.strip()
+            elif hasattr(result, '__iter__') and not isinstance(result, (str, bytes)):
+                first_item = next(iter(result), None)
+                if first_item:
+                    if isinstance(first_item, str):
+                        description = first_item.strip()
+                    elif isinstance(first_item, dict) and 'generated_text' in first_item:
+                        description = first_item['generated_text'].strip()
+                    else:
+                        description = str(first_item).strip()
+            
+            processing_time = (time.time() - start_time) * 1000
+            logger.info(f"Vision analysis completed: {description[:50]}...")
+            
+            # Safe model name extraction
+            try:
+                model_name = "vision:unknown"
+                if hasattr(self.vision_pipeline, 'model'):
+                    if hasattr(self.vision_pipeline.model, 'name_or_path'):
+                        model_name = self.vision_pipeline.model.name_or_path
+                    elif hasattr(self.vision_pipeline.model, 'config') and hasattr(self.vision_pipeline.model.config, 'name_or_path'):
+                        model_name = self.vision_pipeline.model.config.name_or_path
+                    else:
+                        model_name = str(type(self.vision_pipeline.model).__name__)
+            except Exception:
+                model_name = "vision:unknown"
+            
+            return {
+                "result": description or "Product image detected",
+                "processing_time_ms": processing_time,
+                "model_used": model_name
+            }
+            
+        except Exception as e:
+            processing_time = (time.time() - start_time) * 1000
+            logger.error(f"Vision analysis failed: {e}")
+            
+            return {
+                "result": "Product image detected but analysis failed",
+                "processing_time_ms": processing_time,
+                "model_used": "vision:error"
+            }
+    
+    async def _enhance_image_analysis(self, image_description: str, instruction: str) -> str:
+        """Enhance image analysis with instruction context using text model"""
+        try:
+            prompt = f"""You are analyzing an image for an e-commerce application.
+
+Image Description: {image_description}
+User Instruction: {instruction}
+
+Based on the image description and user instruction, provide a focused response that:
+1. Directly addresses what the user asked about
+2. Highlights relevant features from the image
+3. Provides actionable insights for decisions
+
+Keep response concise and helpful (2-3 sentences max).
+Response:"""
+
+            if hasattr(self, 'text_pipeline') and self.text_pipeline:
+                # Use HuggingFace pipeline
+                result = self.text_pipeline(prompt, max_length=200, do_sample=True, temperature=0.7)
+                if isinstance(result, list) and len(result) > 0:
+                    # Handle different result formats from text pipeline
+                    first_result = result[0]
+                    if isinstance(first_result, dict) and 'generated_text' in first_result:
+                        return first_result['generated_text'].replace(prompt, '').strip()
+                    elif isinstance(first_result, str):
+                        return first_result.replace(prompt, '').strip()
+                    else:
+                        return str(first_result).replace(prompt, '').strip()
+                    
+            elif hasattr(self, 'text_model') and self.text_model:
+                # Use GGUF model
+                response = self.text_model(
+                    prompt,
+                    max_tokens=150,
+                    temperature=0.7,
+                    stop=["User:", "\n\n"]
+                )
+                # Handle GGUF model response format
+                if isinstance(response, dict):
+                    choices = response.get('choices', [{}])
+                    if choices and isinstance(choices[0], dict):
+                        return choices[0].get('text', '').strip()
+                    else:
+                        return str(response).strip()
+                else:
+                    return str(response).strip()
+                
+        except Exception as e:
+            logger.warning(f"Text enhancement failed: {e}")
+            
+        # Fallback to simple combination
+        return f"Image shows: {image_description}\n\nRegarding '{instruction}': Based on the image, this appears to be a relevant product that matches your query."
     
     def get_status(self) -> Dict[str, Any]:
         """Get model status"""
@@ -348,8 +551,8 @@ class AIModelManager:
             "models_directory": str(self.models_dir),
             "available_models": len(self.available_models),
             "loaded_models": self.loaded_models,
-            "text_model_ready": self.text_model is not None or self.text_pipeline is not None,
-            "vision_model_ready": self.vision_model is not None,
+            "text_model_ready": self.text_model is not None or (hasattr(self, 'text_pipeline') and self.text_pipeline is not None),
+            "vision_model_ready": hasattr(self, 'vision_pipeline') and self.vision_pipeline is not None,
             "memory_allocated": torch.cuda.memory_allocated() / 1024**3 if torch.cuda.is_available() else None
         }
 

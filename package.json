@@ -21,7 +21,11 @@
     "test:e2e": "turbo run test:e2e",
     "type-check": "turbo run type-check",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
-    "setup": "pnpm install && pnpm run build"
+    "setup": "pnpm install && pnpm run build",
+    "setup:full": "pnpm install && pnpm build --filter=@nextshop/assistant-web-client",
+    "dev:web": "turbo run dev --filter=web",
+    "dev:backend": "turbo run dev --filter=backend",
+    "build:assistant": "turbo run build --filter=@nextshop/assistant-web-client"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

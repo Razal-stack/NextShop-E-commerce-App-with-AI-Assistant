@@ -53,7 +53,7 @@ class AIService:
     
     @staticmethod
     async def process_app_specific_reasoning(app_name: str, user_query: str, context_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Process app-specific reasoning with dynamic configuration - completely generic"""
+        """Process app-specific reasoning with dynamic configuration"""
         start_time = time.time()
         
         # Validate inputs
@@ -74,12 +74,17 @@ class AIService:
             llm_config = app_config.get('llm', {})
             system_prompt_template = llm_config.get('system_prompt', 'Analyze the query: "{user_query}"')
             context_message = llm_config.get('context_message', None)
-            llm_parameters = llm_config.get('parameters', {"max_tokens": 300, "temperature": 0.1})
+            llm_parameters = llm_config.get('parameters', {"max_tokens": 300, "temperature": 0.1})  # Updated default
             
-            # Build prompt using template - the template defines what fields it needs
-            # We pass the entire context_data and let the template extract what it needs
+            # Performance settings for token management
+            performance_config = llm_config.get('performance', {})
+            max_context_tokens = performance_config.get('max_context_tokens', 1500)
+            warn_threshold = performance_config.get('warn_threshold', 1200)
+            enable_token_tracking = performance_config.get('enable_token_tracking', True)
+            
+            # Build prompt using template - Generic for all apps
             try:
-                # Ensure we have safe defaults for all template variables
+                # Standard template variables - app config determines what it needs
                 template_vars = {
                     'user_query': user_query,
                     'available_categories': str(context_data.get('available_categories', [])),
@@ -91,7 +96,30 @@ class AIService:
                 }
                 
                 llm_prompt = system_prompt_template.format(**template_vars)
-                logger.info(f"Template formatted successfully for {app_name}")
+                logger.info(f"Template formatted successfully for '{app_name}'")
+                
+                # Token tracking and context optimization
+                if enable_token_tracking:
+                    # Import token estimation function
+                    from app.models import estimate_tokens, log_token_usage
+                    
+                    # Check prompt size and warn if too large
+                    prompt_tokens = estimate_tokens(llm_prompt)
+                    context_tokens = estimate_tokens(context_message) if context_message else 0
+                    total_context_tokens = prompt_tokens + context_tokens
+                    
+                    logger.info(f"CONTEXT SIZE CHECK - Prompt: {prompt_tokens} tokens, Context: {context_tokens} tokens, Total: {total_context_tokens}")
+                    
+                    if total_context_tokens > max_context_tokens:
+                        logger.error(f"CONTEXT TOO LARGE: {total_context_tokens} tokens exceeds limit of {max_context_tokens}! This WILL cause slowdowns!")
+                        # Truncate the system prompt to reduce size
+                        words = llm_prompt.split()
+                        max_words = int(max_context_tokens * 0.75)  # Use 75% of limit for prompt
+                        if len(words) > max_words:
+                            llm_prompt = ' '.join(words[:max_words]) + '\n\n[Truncated for performance]'
+                            logger.warning(f"Truncated prompt from {len(words)} to {max_words} words")
+                    elif total_context_tokens > warn_threshold:
+                        logger.warning(f"HIGH CONTEXT SIZE: {total_context_tokens} tokens may cause slowdowns (threshold: {warn_threshold})")
                 
             except KeyError as e:
                 logger.warning(f"Template formatting error - missing variable {e}. Using simple prompt.")
@@ -142,30 +170,13 @@ class AIService:
                     # Parse the JSON response from LLM
                     llm_json = json.loads(json_part)
                     
-                    # For NextShop, return the simple format directly
-                    if app_name == "nextshop":
-                        logger.info(f"Successfully parsed simple LLM response for {app_name}")
-                        return llm_json
+                    # Return the parsed response directly - let app handle its own format
+                    llm_json["processing_time_ms"] = (time.time() - start_time) * 1000
+                    llm_json["model_used"] = llm_result.get('model_used', 'unknown')
+                    llm_json["app_config_used"] = app_name
                     
-                    # For other apps, format as AppReasoningResponse
-                    formatted_response = {
-                        "query_analysis": llm_json.get("query_analysis", {
-                            "intent": "product_search",
-                            "confidence": 0.9,
-                            "detected_entities": {},
-                            "requires_conversation_context": False
-                        }),
-                        "execution_plan": llm_json.get("execution_plan", []),
-                        "fallback_response": llm_json.get("fallback_response"),
-                        "expected_result_format": llm_json.get("expected_result_format", "product_list"),
-                        "ui_guidance": llm_json.get("ui_guidance"),
-                        "processing_time_ms": (time.time() - start_time) * 1000,
-                        "model_used": llm_result.get('model_used', 'unknown'),
-                        "app_config_used": app_name
-                    }
-                    
-                    logger.info(f"Successfully parsed LLM response for {app_name}")
-                    return formatted_response
+                    logger.info(f"Successfully parsed LLM response for '{app_name}'")
+                    return llm_json
                     
                 except json.JSONDecodeError as e:
                     logger.warning(f"Failed to parse LLM JSON response: {e}. Applying completion...")
@@ -273,3 +284,84 @@ class AIService:
         except Exception as e:
             logger.error(f"Failed to process image reasoning: {e}")
             raise ValueError(f"Image reasoning failed: {str(e)}")
+
+    @staticmethod
+    async def process_app_image_reasoning(app_name: str, user_query: str, image_data: str, context_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Process app-specific reasoning with image - uses SAME flow as text processing after vision analysis"""
+        start_time = time.time()
+        
+        # Validate inputs
+        if not app_name or not app_name.strip():
+            raise ValueError("App name cannot be empty")
+        if not user_query or not user_query.strip():
+            raise ValueError("User query cannot be empty")
+        if not image_data or not image_data.strip():
+            raise ValueError("Image data cannot be empty")
+        
+        logger.info(f"Processing app image reasoning for '{app_name}': {user_query[:100]}... with image")
+        
+        try:
+            # Step 1: Get simple image description from vision model
+            logger.info("Step 1: Analyzing image content with vision model...")
+            if not hasattr(model_manager, 'vision_pipeline') or model_manager.vision_pipeline is None:
+                logger.info("Loading vision model...")
+                await model_manager.initialize_vision_model()
+            
+            # Simple image analysis - just get description
+            image_result = await model_manager.analyze_image(
+                instruction="Describe this product briefly",
+                image_data=image_data
+            )
+            image_description = image_result["result"]
+            logger.info(f"Vision result: {image_description}")
+            
+            # Step 2: Combine user query with image description
+            combined_query = f"{user_query}. Image shows: {image_description}"
+            logger.info("Step 2: Combined query created")
+            
+            # Step 3: Process through NORMAL text reasoning (same as regular queries)
+            logger.info("Step 3: Processing through standard text reasoning...")
+            text_result = await AIService.process_app_specific_reasoning(
+                app_name=app_name,
+                user_query=combined_query,  # Combined query with image info
+                context_data=context_data
+            )
+            
+            # Step 4: Add image metadata to result
+            processing_time = (time.time() - start_time) * 1000
+            text_result["processing_time_ms"] = processing_time
+            text_result["image_description"] = image_description
+            text_result["model_used"] = {
+                "vision": image_result.get("model_used", "vision_model"),
+                "text": text_result.get("model_used", "text_model")
+            }
+            
+            logger.info(f"Successfully processed image reasoning for '{app_name}'")
+            return text_result
+            
+        except Exception as e:
+            logger.error(f"Failed to process app image reasoning: {e}")
+            
+            # Fallback: return same structure as text processing fallback
+            processing_time = (time.time() - start_time) * 1000
+            return {
+                "intent": "product_search",
+                "categories": [],
+                "product_items": [user_query],
+                "constraints": {},
+                "ui_handlers": [],
+                "variants": [],
+                "confidence": 0.5,
+                "execution_plan": {
+                    "steps": [{
+                        "step_number": 1,
+                        "step_type": "product_search",
+                        "tool_name": "products.search"
+                    }]
+                },
+                "processing_time_ms": processing_time,
+                "model_used": "fallback",
+                "app_config_used": app_name,
+                "image_description": "Image analysis failed",
+                "error": str(e)
+            }

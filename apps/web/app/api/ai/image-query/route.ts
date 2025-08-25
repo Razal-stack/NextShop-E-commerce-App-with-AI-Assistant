@@ -3,28 +3,47 @@ import { NextRequest, NextResponse } from 'next/server';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const aiServerUrl = process.env.AI_SERVER_URL ?? 'http://127.0.0.1:8009/describe-image';
+    const { query, imageData, userId, conversationHistory } = body;
+    
+    // Validate required fields
+    if (!query || !imageData) {
+      return NextResponse.json(
+        { 
+          success: false,
+          error: 'Missing required fields: query and imageData' 
+        }, 
+        { status: 400 }
+      );
+    }
 
-    const upstreamResponse = await fetch(aiServerUrl, {
+    // Forward to backend AI service
+    const backendUrl = process.env.BACKEND_URL || 'http://localhost:3001';
+    const backendResponse = await fetch(`${backendUrl}/api/ai/query-image`, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        query,
+        imageData,
+        userId: userId || 1,
+        conversationHistory: conversationHistory || []
+      }),
     });
     
-    if (!upstreamResponse.ok) {
-      throw new Error(`AI Server responded with status: ${upstreamResponse.status}`);
+    if (!backendResponse.ok) {
+      throw new Error(`Backend responded with status: ${backendResponse.status}`);
     }
 
-    const data = await upstreamResponse.json();
+    const data = await backendResponse.json();
     return NextResponse.json(data);
   } catch (error) {
     console.error('Image query proxy error:', error);
     return NextResponse.json(
       { 
-        error: 'Failed to process image',
-        caption: 'Unable to analyze image at this time'
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to process image query',
+        details: 'Image query processing failed'
       }, 
       { status: 500 }
     );

@@ -284,7 +284,28 @@ export const NexAssistant: React.FC<{
       const conversationHistory = uiHandler.buildConversationHistory(state.messages);
       conversationHistory.push({ role: 'user', content: messageText });
 
-      const response = await mcpClient.sendMessage(conversationHistory);
+      // Choose appropriate method based on whether image data exists
+      let response;
+      if (imageData && imageData.base64) {
+        // Validate image data format
+        if (!imageData.base64.startsWith('data:image/')) {
+          throw new Error('Invalid image format. Please select a valid image file.');
+        }
+        
+        // Create progress callback for image processing
+        const progressCallback = (info: { stage: string; timeElapsed: number; message: string }) => {
+          // Update processing time display
+          setState(prev => ({ ...prev, processingTime: Math.floor(info.timeElapsed / 1000) }));
+        };
+        
+        // Use image-specific method for image queries
+        response = await mcpClient.sendImageQuery(messageText, imageData.base64, progressCallback);
+      } else if (imageData && !imageData.base64) {
+        throw new Error('Image data is corrupted. Please try uploading the image again.');
+      } else {
+        // Use text-only method for regular queries
+        response = await mcpClient.sendMessage(conversationHistory);
+      }
       const nexMessage = uiHandler.processResponse(response, messageText);
       
       setState(prev => ({
