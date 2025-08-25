@@ -1246,9 +1246,8 @@ export default function DraggableNexAssistant() {
                           variant="ghost"
                           className="h-8 w-8 p-0 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors duration-200"
                           onClick={() => {
-                            // Future voice functionality
-                            const voiceMessage = uiHandler.createErrorMessage("Voice input is coming soon! For now, you can type your questions.");
-                            setMessages(prev => [...prev, voiceMessage]);
+                            // Voice functionality is now handled by the assistant shell
+                            // No need to show any message - the shell handles voice UI
                           }}
                         >
                           <Mic className="w-4 h-4" />
@@ -1258,9 +1257,8 @@ export default function DraggableNexAssistant() {
                           variant="ghost"
                           className="h-8 w-8 p-0 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors duration-200"
                           onClick={() => {
-                            // Future image functionality
-                            const imageMessage = uiHandler.createErrorMessage("Image search is coming soon! Try describing what you're looking for instead.");
-                            setMessages(prev => [...prev, imageMessage]);
+                            // Image functionality is now handled by the assistant shell
+                            // No need to show any message - the shell handles image UI
                           }}
                         >
                           <Image className="w-4 h-4" />

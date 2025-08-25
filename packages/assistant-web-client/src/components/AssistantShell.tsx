@@ -1,21 +1,30 @@
 'use client';
 
 /**
- * @nextshop/assistant-web-client - Generic UI Shell
+ * @nextshop/assistant-web-client - Generic UI Shell (Refactored)
  * ONLY UI/UX - no business logic
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Sparkles, 
-  Send, 
   X, 
   Mic, 
-  Image as ImageIcon, 
   RotateCcw,
   ArrowUp
 } from 'lucide-react';
+import { ImageUploader, type ImageData } from './ImageUploader';
+import { InlineVoiceRecorder } from './InlineVoiceRecorder';
+
+// Import custom hooks directly (will fix barrel export later)
+import { useVoiceRecording } from '../hooks/useVoiceRecording';
+import { useDragAndDrop } from '../hooks/useDragAndDrop';
+import { useInputHandlers } from '../hooks/useInputHandlers';
+import { useImageManagement } from '../hooks/useImageManagement';
+
+// Import animation configs
+import { ANIMATION_CONFIG, getExpandedAnimation, ANIMATION_STYLES } from '../utils/animations';
 
 // ==================== TYPES ====================
 
@@ -50,7 +59,7 @@ export interface AssistantShellProps {
   onReset?: () => void;
   onVoiceClick?: () => void;
   onImageClick?: () => void;
-  onSendMessage: (message: string) => void;
+  onSendMessage: (message: string, imageData?: ImageData) => void;
   onDrag?: (position: { x: number; y: number }) => void;
   
   // Styling
@@ -77,78 +86,51 @@ export const AssistantShell: React.FC<AssistantShellProps> = ({
   className,
   style
 }) => {
-  // ==================== DRAGGING STATE ====================
-  const [isDragging, setIsDragging] = useState(false);
-  const [hasDragged, setHasDragged] = useState(false);
-  const [currentPosition, setCurrentPosition] = useState(position);
+  // ==================== CUSTOM HOOKS ====================
+  
+  // Voice recording functionality
+  const voiceRecording = useVoiceRecording();
+  
+  // Image management functionality
+  const imageManagement = useImageManagement(onImageClick);
+  
+  // Drag and drop functionality
+  const dragAndDrop = useDragAndDrop(position, onDrag, onToggleExpanded);
+  
+  // Input handling functionality
+  const inputHandlers = useInputHandlers(
+    inputValue,
+    isProcessing,
+    imageManagement.selectedImage,
+    onSendMessage,
+    imageManagement.handleImageRemove
+  );
 
-  // Update position when prop changes
-  useEffect(() => {
-    setCurrentPosition(position);
-  }, [position]);
+  // ==================== ENHANCED HANDLERS ====================
+  
+  const handleVoiceClick = useCallback(() => {
+    // Call optional external handler first
+    onVoiceClick?.();
+    
+    // Then handle internal voice logic
+    voiceRecording.handleVoiceClick(
+      inputValue, 
+      onInputChange, 
+      imageManagement.handleImageRemove
+    );
+  }, [onVoiceClick, voiceRecording.handleVoiceClick, inputValue, onInputChange, imageManagement.handleImageRemove]);
 
-  // ==================== DRAG HANDLERS ====================
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.target === e.currentTarget || (e.target as HTMLElement).closest('.dragHandle')) {
-      setIsDragging(true);
-      setHasDragged(false);
-      
-      const startX = e.clientX - currentPosition.x;
-      const startY = e.clientY - currentPosition.y;
-      
-      const handleMouseMove = (e: MouseEvent) => {
-        setHasDragged(true);
-        // Viewport boundaries like original
-        const newX = Math.max(0, Math.min((typeof window !== 'undefined' ? window.innerWidth : 1200) - 56, e.clientX - startX));
-        const newY = Math.max(0, Math.min((typeof window !== 'undefined' ? window.innerHeight : 800) - 56, e.clientY - startY));
-        
-        const newPosition = { x: newX, y: newY };
-        setCurrentPosition(newPosition);
-        onDrag?.(newPosition);
-      };
-      
-      const handleMouseUp = () => {
-        setIsDragging(false);
-        document.removeEventListener('mousemove', handleMouseMove);
-        document.removeEventListener('mouseup', handleMouseUp);
-      };
-      
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
-    }
-  }, [currentPosition, onDrag]);
-
-  const handleToggle = useCallback(() => {
-    if (!hasDragged) {
-      onToggleExpanded();
-    }
-  }, [hasDragged, onToggleExpanded]);
-
-  // ==================== INPUT HANDLERS ====================
-  const handleSubmit = useCallback((e: React.FormEvent) => {
-    e.preventDefault();
-    if (inputValue.trim() && !isProcessing) {
-      onSendMessage(inputValue.trim());
-    }
-  }, [inputValue, isProcessing, onSendMessage]);
-
-  const handleKeyPress = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      if (inputValue.trim() && !isProcessing) {
-        onSendMessage(inputValue.trim());
-      }
-    }
-  }, [inputValue, isProcessing, onSendMessage]);
-
-  const handleTextareaInput = useCallback((e: React.FormEvent<HTMLTextAreaElement>) => {
-    const target = e.target as HTMLTextAreaElement;
-    target.style.height = 'auto';
-    target.style.height = `${Math.max(56, Math.min(target.scrollHeight, 120))}px`;
-  }, []);
+  const handleInternalReset = useCallback(() => {
+    // Clean up all internal state
+    imageManagement.cleanup();
+    voiceRecording.cleanup();
+    
+    // Then call external reset handler
+    onReset?.();
+  }, [imageManagement.cleanup, voiceRecording.cleanup, onReset]);
 
   // ==================== POSITION CALCULATION ====================
-  const isOnLeft = currentPosition.x < (typeof window !== 'undefined' ? window.innerWidth / 2 : 400);
+  const isOnLeft = dragAndDrop.currentPosition.x < (typeof window !== 'undefined' ? window.innerWidth / 2 : 400);
   const expandedLeft = isOnLeft ? 20 : undefined;
   const expandedRight = isOnLeft ? undefined : 20;
 
@@ -159,18 +141,14 @@ export const AssistantShell: React.FC<AssistantShellProps> = ({
         key="collapsed-assistant"
         className={`fixed z-40 cursor-pointer dragHandle ${className || ''}`}
         style={{ 
-          left: currentPosition.x, 
-          top: currentPosition.y,
+          left: dragAndDrop.currentPosition.x, 
+          top: dragAndDrop.currentPosition.y,
           ...style 
         }}
-        whileHover={{ scale: 1.05 }}
-        whileTap={{ scale: 0.95 }}
-        initial={{ scale: 0, rotate: 180 }}
-        animate={{ scale: 1, rotate: 0 }}
-        exit={{ scale: 0, rotate: -180 }}
-        transition={{ type: 'spring', stiffness: 200, damping: 20 }}
-        onMouseDown={handleMouseDown}
-        onClick={handleToggle}
+        {...ANIMATION_CONFIG.collapsed}
+        initial={{ scale: 1, rotate: 0 }} // Override to ensure visibility on mount
+        onMouseDown={dragAndDrop.handleMouseDown}
+        onClick={dragAndDrop.handleToggle}
       >
         <div 
           className="w-14 h-14 rounded-full flex items-center justify-center shadow-lg hover:shadow-xl transition-all duration-300"
@@ -178,16 +156,9 @@ export const AssistantShell: React.FC<AssistantShellProps> = ({
             background: 'var(--brand-gradient, linear-gradient(135deg, #0439d7 0%, #1d4ed8 50%, #1e40af 100%))'
           }}
         >
-          <motion.div
-            animate={{
-              scale: [1, 1.2, 1],
-              rotate: [0, 180, 360],
-            }}
-            transition={{
-              duration: 4,
-              repeat: Infinity,
-              ease: "easeInOut",
-            }}
+          <motion.div 
+            animate={ANIMATION_CONFIG.sparkles.animate}
+            transition={ANIMATION_CONFIG.sparkles.transition}
           >
             <Sparkles className="w-6 h-6 text-white" />
           </motion.div>
@@ -212,10 +183,7 @@ export const AssistantShell: React.FC<AssistantShellProps> = ({
           maxWidth: '400px',
           ...style,
         }}
-        initial={{ opacity: 0, scale: 0.8, x: isOnLeft ? -400 : 400 }}
-        animate={{ opacity: 1, scale: 1, x: 0 }}
-        exit={{ opacity: 0, scale: 0.8, x: isOnLeft ? -400 : 400 }}
-        transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+        {...getExpandedAnimation(isOnLeft)}
       >
         {/* ==================== HEADER ==================== */}
         <motion.div
@@ -223,7 +191,7 @@ export const AssistantShell: React.FC<AssistantShellProps> = ({
           style={{
             background: 'var(--brand-gradient, linear-gradient(135deg, #0439d7 0%, #1d4ed8 50%, #1e40af 100%))'
           }}
-          onMouseDown={handleMouseDown}
+          onMouseDown={dragAndDrop.handleMouseDown}
         >
           <div className="flex items-center space-x-3">
             {/* Animated avatar */}
@@ -231,16 +199,9 @@ export const AssistantShell: React.FC<AssistantShellProps> = ({
               className="w-8 h-8 rounded-lg flex items-center justify-center relative overflow-hidden"
               style={{ background: 'rgba(255, 255, 255, 0.2)' }}
             >
-              <motion.div
-                animate={{
-                  scale: [1, 1.2, 1],
-                  rotate: [0, 180, 360],
-                }}
-                transition={{
-                  duration: 4,
-                  repeat: Infinity,
-                  ease: "easeInOut",
-                }}
+              <motion.div 
+                animate={ANIMATION_CONFIG.sparkles.animate}
+                transition={ANIMATION_CONFIG.sparkles.transition}
               >
                 <Sparkles className="w-5 h-5 text-white" />
               </motion.div>
@@ -270,10 +231,9 @@ export const AssistantShell: React.FC<AssistantShellProps> = ({
           <div className="flex items-center space-x-2">
             {config.enableReset && onReset && (
               <motion.button
-                onClick={onReset}
+                onClick={handleInternalReset}
                 className="p-1 text-white hover:text-white hover:bg-white/10 rounded transition-colors"
-                whileHover={{ scale: 1.1 }}
-                whileTap={{ scale: 0.9 }}
+                {...ANIMATION_CONFIG.button}
               >
                 <RotateCcw className="w-4 h-4" />
               </motion.button>
@@ -282,8 +242,7 @@ export const AssistantShell: React.FC<AssistantShellProps> = ({
             <motion.button
               onClick={onToggleExpanded}
               className="p-1 text-white hover:text-white hover:bg-white/10 rounded transition-colors"
-              whileHover={{ scale: 1.1 }}
-              whileTap={{ scale: 0.9 }}
+              {...ANIMATION_CONFIG.button}
             >
               <X className="w-4 h-4" />
             </motion.button>
@@ -291,144 +250,203 @@ export const AssistantShell: React.FC<AssistantShellProps> = ({
         </motion.div>
 
         {/* ==================== MESSAGES AREA ==================== */}
-        <div 
-          className="flex-1 overflow-y-auto bg-white"
-        >
-          {children}
+        <div className="flex-1 overflow-y-auto bg-white">
+          {/* Voice Recording Interface - Replaces messages when active */}
+          {voiceRecording.isVoiceMode ? (
+            <InlineVoiceRecorder
+              isActive={voiceRecording.isVoiceMode}
+              voiceState={voiceRecording.voiceState}
+              transcribedText={voiceRecording.transcribedText}
+              voiceError={voiceRecording.voiceError}
+              onStartRecording={voiceRecording.startVoiceRecording}
+              onStopRecording={voiceRecording.stopVoiceRecording}
+              onConfirm={() => voiceRecording.confirmVoiceTranscription(onInputChange)}
+              onCancel={voiceRecording.cancelVoiceRecording}
+              onRetry={() => {
+                voiceRecording.startVoiceRecording();
+              }}
+            />
+          ) : (
+            children
+          )}
         </div>
 
         {/* ==================== INPUT AREA ==================== */}
-        <div className="flex-shrink-0 p-4 bg-white border-t border-slate-200">
-          <form onSubmit={handleSubmit} className="space-y-3">
-            <div className="relative">
-              <div className="relative flex items-stretch bg-slate-50 border border-slate-200 rounded-2xl transition-all duration-200 focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-100 min-h-[3.5rem]">
-                
-                {/* Left side icons */}
-                <div className="flex items-center pl-4 space-x-2">
-                  {config.enableVoice && onVoiceClick && (
-                    <button
-                      type="button"
-                      onClick={onVoiceClick}
-                      className="h-8 w-8 p-0 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors duration-200 flex items-center justify-center border-0 bg-transparent"
-                    >
-                      <Mic className="w-4 h-4" />
-                    </button>
-                  )}
-                  
-                  {config.enableImage && onImageClick && (
-                    <button
-                      type="button"
-                      onClick={onImageClick}
-                      className="h-8 w-8 p-0 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-full transition-colors duration-200 flex items-center justify-center border-0 bg-transparent"
-                    >
-                      <ImageIcon className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-
-                {/* Textarea */}
-                <div className="flex-1 relative">
-                  <textarea
-                    value={inputValue}
-                    onChange={(e) => onInputChange(e.target.value)}
-                    onKeyPress={handleKeyPress}
-                    onInput={handleTextareaInput}
-                    className="w-full max-h-32 min-h-[3.5rem] py-4 px-3 bg-transparent border-none resize-none text-sm leading-relaxed focus:outline-none scrollbar-thin"
-                    rows={1}
-                    style={{ 
-                      height: 'auto',
-                      overflowY: inputValue.split('\n').length > 2 ? 'auto' : 'hidden'
-                    }}
-                    placeholder=""
-                    disabled={isProcessing}
-                  />
-                  
-                  {/* Animated placeholder */}
-                  {!inputValue && (
-                    <div className="absolute inset-0 py-4 px-3 pointer-events-none flex items-center">
-                      <div className="text-slate-400 text-sm">
-                        <span>{config.animatedPlaceholder || config.placeholder || 'Type your message...'}</span>
-                        {config.animatedPlaceholder && (
-                          <span 
-                            className="ml-1 animate-pulse"
-                            style={{ color: 'var(--brand-500, #0439d7)' }}
-                          >
-                            |
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Send button */}
-                <div className="flex items-center pr-4">
+        {/* Hide input area when in voice mode */}
+        {!voiceRecording.isVoiceMode && (
+          <div className="flex-shrink-0 p-4 bg-white border-t border-slate-200">
+            {/* Image Preview Area */}
+            {imageManagement.selectedImage && (
+              <motion.div
+                className="mb-3 p-3 bg-slate-50 rounded-xl border border-slate-200"
+                {...ANIMATION_CONFIG.imagePreview}
+              >
+                <div className="flex items-center gap-3">
+                  <div className="relative group">
+                    <img
+                      src={imageManagement.selectedImage.preview}
+                      alt={imageManagement.selectedImage.file.name}
+                      className="w-16 h-16 rounded-lg object-cover border border-slate-300 shadow-sm"
+                    />
+                    <div className="absolute inset-0 bg-black bg-opacity-0 group-hover:bg-opacity-10 transition-all duration-200 rounded-lg"></div>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h4 className="text-sm font-medium text-slate-700 truncate mb-1">
+                      {imageManagement.selectedImage.file.name}
+                    </h4>
+                    <p className="text-xs text-slate-500">
+                      {(imageManagement.selectedImage.file.size / 1024).toFixed(1)} KB • {imageManagement.selectedImage.file.type.split('/')[1].toUpperCase()}
+                    </p>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Ready to send with your message
+                    </p>
+                  </div>
                   <motion.button
-                    type="submit"
-                    disabled={!inputValue.trim() || isProcessing}
-                    className="h-9 w-9 p-0 rounded-full transition-all duration-200 shadow-sm border-0 flex items-center justify-center"
-                    style={
-                      inputValue.trim() && !isProcessing
-                        ? { 
-                            background: 'var(--brand-gradient, linear-gradient(135deg, #0439d7 0%, #1d4ed8 50%, #1e40af 100%))',
-                            color: 'white'
-                          }
-                        : {
-                            backgroundColor: '#cbd5e1',
-                            color: '#64748b',
-                            cursor: 'not-allowed'
-                          }
-                    }
-                    whileHover={inputValue.trim() && !isProcessing ? { scale: 1.05 } : {}}
-                    whileTap={inputValue.trim() && !isProcessing ? { scale: 0.95 } : {}}
+                    onClick={imageManagement.handleImageRemove}
+                    className="w-8 h-8 rounded-full bg-red-100 hover:bg-red-200 text-red-600 flex items-center justify-center transition-colors"
+                    {...ANIMATION_CONFIG.button}
+                    title="Remove image"
                   >
-                    <ArrowUp className="w-4 h-4" />
+                    <X className="w-4 h-4" />
                   </motion.button>
                 </div>
+              </motion.div>
+            )}
+            
+            <form onSubmit={inputHandlers.handleSubmit} className="space-y-3">
+              <div className="relative">
+                <div className="relative flex items-stretch bg-slate-50 border border-slate-200 rounded-2xl transition-all duration-200 focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-100 min-h-[3.5rem]">
+                  
+                  {/* Left side icons */}
+                  <div className="flex items-center pl-4 space-x-2">
+                    {config.enableVoice && (
+                      <motion.button
+                        type="button"
+                        onClick={handleVoiceClick}
+                        disabled={isProcessing}
+                        className={`
+                          h-8 w-8 p-0 rounded-full transition-colors duration-200 
+                          flex items-center justify-center border-0 bg-transparent
+                          ${isProcessing 
+                            ? 'text-slate-400 cursor-not-allowed' 
+                            : 'text-slate-500 hover:text-blue-600 hover:bg-blue-50 cursor-pointer'
+                          }
+                        `}
+                        whileHover={!isProcessing ? { scale: 1.1 } : {}}
+                        whileTap={!isProcessing ? { scale: 0.9 } : {}}
+                        title="Voice input"
+                      >
+                        <Mic className="w-4 h-4" />
+                      </motion.button>
+                    )}
+                    
+                    {config.enableImage && (
+                      <ImageUploader
+                        onImageSelect={imageManagement.handleImageSelect}
+                        onImageRemove={imageManagement.handleImageRemove}
+                        selectedImage={imageManagement.selectedImage}
+                        disabled={isProcessing}
+                      />
+                    )}
+                  </div>
+
+                  {/* Textarea */}
+                  <div className="flex-1 relative">
+                    <textarea
+                      value={inputValue}
+                      onChange={(e) => onInputChange(e.target.value)}
+                      onKeyPress={inputHandlers.handleKeyPress}
+                      onInput={inputHandlers.handleTextareaInput}
+                      className="w-full max-h-32 min-h-[3.5rem] py-4 px-3 bg-transparent border-none resize-none text-sm leading-relaxed focus:outline-none scrollbar-thin"
+                      rows={1}
+                      style={{ 
+                        height: 'auto',
+                        overflowY: inputValue.split('\n').length > 2 ? 'auto' : 'hidden'
+                      }}
+                      placeholder=""
+                      disabled={isProcessing}
+                    />
+                    
+                    {/* Animated placeholder */}
+                    {!inputValue && (
+                      <div className="absolute inset-0 py-4 px-3 pointer-events-none flex items-center">
+                        <div className="text-slate-400 text-sm">
+                          <span>{config.animatedPlaceholder || config.placeholder || 'Type your message...'}</span>
+                          {config.animatedPlaceholder && (
+                            <span 
+                              className="ml-1 animate-pulse"
+                              style={{ color: 'var(--brand-500, #0439d7)' }}
+                            >
+                              |
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Send button */}
+                  <div className="flex items-center pr-4">
+                    <motion.button
+                      type="submit"
+                      disabled={!inputValue.trim() || isProcessing}
+                      className="h-9 w-9 p-0 rounded-full transition-all duration-200 shadow-sm border-0 flex items-center justify-center"
+                      style={
+                        inputValue.trim() && !isProcessing
+                          ? { 
+                              background: 'var(--brand-gradient, linear-gradient(135deg, #0439d7 0%, #1d4ed8 50%, #1e40af 100%))',
+                              color: 'white'
+                            }
+                          : {
+                              backgroundColor: '#cbd5e1',
+                              color: '#64748b',
+                              cursor: 'not-allowed'
+                            }
+                      }
+                      {...(inputValue.trim() && !isProcessing ? ANIMATION_CONFIG.sendButton : {})}
+                    >
+                      <ArrowUp className="w-4 h-4" />
+                    </motion.button>
+                  </div>
+                </div>
+
+                {/* Typing indicator */}
+                {inputValue && (
+                  <motion.div
+                    {...ANIMATION_CONFIG.typingIndicator}
+                    className="absolute top-3 right-16"
+                  >
+                    <div 
+                      className="w-2 h-2 rounded-full animate-pulse" 
+                      style={{ backgroundColor: 'var(--brand-500, #0439d7)' }}
+                    />
+                  </motion.div>
+                )}
               </div>
 
-              {/* Typing indicator */}
-              {inputValue && (
-                <motion.div
-                  initial={{ opacity: 0, scale: 0.8 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  className="absolute top-3 right-16"
-                >
-                  <div 
-                    className="w-2 h-2 rounded-full animate-pulse" 
-                    style={{ backgroundColor: 'var(--brand-500, #0439d7)' }}
-                  />
-                </motion.div>
-              )}
-            </div>
-
-            {/* Helper text */}
-            <div className="flex items-center justify-between text-xs">
-              <div className="flex items-center space-x-4 text-slate-500">
-                <span className="flex items-center">
-                  <span 
-                    className="w-1.5 h-1.5 rounded-full mr-2" 
-                    style={{ backgroundColor: 'var(--brand-400, #60a5fa)' }}
-                  />
-                  Press Enter to send
-                </span>
-                <span className="flex items-center">
-                  <span className="w-1.5 h-1.5 rounded-full mr-2 bg-slate-300" />
-                  Shift + Enter for new line
-                </span>
+              {/* Helper text */}
+              <div className="flex items-center justify-between text-xs">
+                <div className="flex items-center space-x-4 text-slate-500">
+                  <span className="flex items-center">
+                    <span 
+                      className="w-1.5 h-1.5 rounded-full mr-2" 
+                      style={{ backgroundColor: 'var(--brand-400, #60a5fa)' }}
+                    />
+                    Press Enter to send
+                  </span>
+                  <span className="flex items-center">
+                    <span className="w-1.5 h-1.5 rounded-full mr-2 bg-slate-300" />
+                    Shift + Enter for new line
+                  </span>
+                </div>
               </div>
-            </div>
-          </form>
-        </div>
+            </form>
+          </div>
+        )}
       </motion.div>
 
       {/* Add shimmer animation styles */}
-      <style>{`
-        @keyframes shimmer {
-          0% { transform: translateX(-100%); }
-          100% { transform: translateX(100%); }
-        }
-      `}</style>
+      <style>{ANIMATION_STYLES}</style>
     </AnimatePresence>
   );
 };

@@ -7,11 +7,7 @@
  */
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { 
-  AssistantShell, 
-  type AssistantShellConfig, 
-  type ImageData 
-} from '@nextshop/assistant-web-client';
+import { AssistantShell, type AssistantShellConfig } from '@nextshop/assistant-web-client';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -252,10 +248,10 @@ export const NexAssistant: React.FC<{
 
   // ==================== COMPLETE MESSAGE HANDLERS ====================
   
-  const handleSendMessage = useCallback(async (messageText: string, imageData?: ImageData) => {
+  const handleSendMessage = useCallback(async (messageText: string) => {
     // Basic validation
-    if (!messageText.trim() && !imageData) {
-      const errorMessage = uiHandler.createErrorMessage('Please enter a message or select an image');
+    if (!messageText.trim()) {
+      const errorMessage = uiHandler.createErrorMessage('Please enter a message');
       setState(prev => ({ ...prev, messages: [...prev.messages, errorMessage] }));
       return;
     }
@@ -264,13 +260,7 @@ export const NexAssistant: React.FC<{
       setState(prev => ({ ...prev, showQuickSuggestions: false }));
     }
 
-    // Create user message with optional image
-    let finalMessage = messageText.trim();
-    if (imageData) {
-      finalMessage = finalMessage ? `${finalMessage}\n[Image: ${imageData.file.name}]` : `[Image: ${imageData.file.name}]`;
-    }
-
-    const userMessage = uiHandler.createUserMessage(finalMessage);
+    const userMessage = uiHandler.createUserMessage(messageText);
     setState(prev => ({ 
       ...prev, 
       messages: [...prev.messages, userMessage],

@@ -9,6 +9,10 @@
 // Core UI component
 export { AssistantShell, type AssistantShellProps, type AssistantShellConfig } from './components/AssistantShell';
 
+// Voice & Image components
+export { InlineVoiceRecorder, type InlineVoiceRecorderProps } from './components/InlineVoiceRecorder';
+export { ImageUploader, ImagePreview, type ImageUploaderProps, type ImagePreviewProps, type ImageData } from './components/ImageUploader';
+
 // General types
 export * from './types';
 
